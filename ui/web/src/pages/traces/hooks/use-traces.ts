@@ -61,6 +61,7 @@ interface TraceFilters {
 export function useTraces() {
   const http = useHttp();
   const [traces, setTraces] = useState<TraceData[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(
@@ -72,10 +73,11 @@ export function useTraces() {
         if (filters.userId) params.user_id = filters.userId;
         if (filters.status) params.status = filters.status;
         if (filters.limit) params.limit = String(filters.limit);
-        if (filters.offset) params.offset = String(filters.offset);
+        if (filters.offset !== undefined) params.offset = String(filters.offset);
 
-        const res = await http.get<{ traces: TraceData[] }>("/v1/traces", params);
+        const res = await http.get<{ traces: TraceData[]; total?: number }>("/v1/traces", params);
         setTraces(res.traces ?? []);
+        setTotal(res.total ?? 0);
       } catch {
         // ignore
       } finally {
@@ -96,5 +98,5 @@ export function useTraces() {
     [http],
   );
 
-  return { traces, loading, load, getTrace };
+  return { traces, total, loading, load, getTrace };
 }

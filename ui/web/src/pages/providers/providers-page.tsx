@@ -1,15 +1,17 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Cpu, Plus, RefreshCw, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { SearchInput } from "@/components/shared/search-input";
+import { Pagination } from "@/components/shared/pagination";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useProviders, type ProviderData, type ProviderInput } from "./hooks/use-providers";
 import { ProviderFormDialog } from "./provider-form-dialog";
 import { useMinLoading } from "@/hooks/use-min-loading";
+import { usePagination } from "@/hooks/use-pagination";
 
 const typeBadge: Record<string, { label: string; variant: "default" | "secondary" | "outline" }> = {
   anthropic_native: { label: "Anthropic", variant: "default" },
@@ -33,6 +35,10 @@ export function ProvidersPage() {
       p.name.toLowerCase().includes(search.toLowerCase()) ||
       (p.display_name || "").toLowerCase().includes(search.toLowerCase()),
   );
+
+  const { pageItems, pagination, setPage, setPageSize, resetPage } = usePagination(filtered);
+
+  useEffect(() => { resetPage(); }, [search, resetPage]);
 
   const handleCreate = async (data: ProviderInput) => {
     await createProvider(data);
@@ -103,7 +109,7 @@ export function ProvidersPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((p) => {
+                {pageItems.map((p) => {
                   const tb = typeBadge[p.provider_type] ?? { label: p.provider_type, variant: "outline" as const };
                   return (
                     <tr key={p.id} className="border-b last:border-0 hover:bg-muted/30">
@@ -160,6 +166,14 @@ export function ProvidersPage() {
                 })}
               </tbody>
             </table>
+            <Pagination
+              page={pagination.page}
+              pageSize={pagination.pageSize}
+              total={pagination.total}
+              totalPages={pagination.totalPages}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
           </div>
         )}
       </div>

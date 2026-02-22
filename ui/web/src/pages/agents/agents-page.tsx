@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router";
 import { Plus, Bot } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { SearchInput } from "@/components/shared/search-input";
+import { Pagination } from "@/components/shared/pagination";
 import { CardSkeleton } from "@/components/shared/loading-skeleton";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
@@ -11,6 +12,7 @@ import { useAgents } from "./hooks/use-agents";
 import { AgentCard } from "./agent-card";
 import { AgentCreateDialog } from "./agent-create-dialog";
 import { AgentDetailPage } from "./agent-detail/agent-detail-page";
+import { usePagination } from "@/hooks/use-pagination";
 
 export function AgentsPage() {
   const { id: detailId } = useParams<{ id: string }>();
@@ -38,6 +40,10 @@ export function AgentsPage() {
       (a.display_name ?? "").toLowerCase().includes(q)
     );
   });
+
+  const { pageItems, pagination, setPage, setPageSize, resetPage } = usePagination(filtered);
+
+  useEffect(() => { resetPage(); }, [search, resetPage]);
 
   return (
     <div className="p-6">
@@ -78,15 +84,25 @@ export function AgentsPage() {
             }
           />
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {filtered.map((agent) => (
-              <AgentCard
-                key={agent.id}
-                agent={agent}
-                onClick={() => navigate(`/agents/${agent.id}`)}
-              />
-            ))}
-          </div>
+          <>
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {pageItems.map((agent) => (
+                <AgentCard
+                  key={agent.id}
+                  agent={agent}
+                  onClick={() => navigate(`/agents/${agent.id}`)}
+                />
+              ))}
+            </div>
+            <Pagination
+              page={pagination.page}
+              pageSize={pagination.pageSize}
+              total={pagination.total}
+              totalPages={pagination.totalPages}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
+          </>
         )}
       </div>
 

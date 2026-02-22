@@ -1,19 +1,29 @@
+import { useState, useEffect } from "react";
 import { BarChart3, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
+import { Pagination } from "@/components/shared/pagination";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { formatTokens } from "@/lib/format";
 import { useUsage } from "./hooks/use-usage";
 import { useMinLoading } from "@/hooks/use-min-loading";
 
 export function UsagePage() {
-  const { records, summary, loading, loadRecords, loadSummary } = useUsage();
+  const { records, total, summary, loading, loadRecords, loadSummary } = useUsage();
   const spinning = useMinLoading(loading);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  useEffect(() => {
+    loadRecords({ limit: pageSize, offset: (page - 1) * pageSize });
+  }, [page, pageSize]);
 
   const handleRefresh = () => {
-    loadRecords();
+    loadRecords({ limit: pageSize, offset: (page - 1) * pageSize });
     loadSummary();
   };
 
@@ -112,6 +122,14 @@ export function UsagePage() {
                     ))}
                   </tbody>
                 </table>
+                <Pagination
+                  page={page}
+                  pageSize={pageSize}
+                  total={total}
+                  totalPages={totalPages}
+                  onPageChange={setPage}
+                  onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+                />
               </div>
             )}
           </div>

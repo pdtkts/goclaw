@@ -29,19 +29,22 @@ export interface UsageSummary {
 export function useUsage() {
   const ws = useWs();
   const [records, setRecords] = useState<UsageRecord[]>([]);
+  const [total, setTotal] = useState(0);
   const [summary, setSummary] = useState<UsageSummary | null>(null);
   const [loading, setLoading] = useState(false);
 
   const loadRecords = useCallback(
-    async (agentId?: string, limit = 50) => {
+    async (opts?: { agentId?: string; limit?: number; offset?: number }) => {
       if (!ws.isConnected) return;
       setLoading(true);
       try {
-        const res = await ws.call<{ records: UsageRecord[] }>(Methods.USAGE_GET, {
-          agentId: agentId || undefined,
-          limit,
+        const res = await ws.call<{ records: UsageRecord[]; total?: number }>(Methods.USAGE_GET, {
+          agentId: opts?.agentId || undefined,
+          limit: opts?.limit,
+          offset: opts?.offset,
         });
         setRecords(res.records ?? []);
+        setTotal(res.total ?? 0);
       } catch {
         // ignore
       } finally {
@@ -66,5 +69,5 @@ export function useUsage() {
     loadSummary();
   }, [loadRecords, loadSummary]);
 
-  return { records, summary, loading, loadRecords, loadSummary };
+  return { records, total, summary, loading, loadRecords, loadSummary };
 }

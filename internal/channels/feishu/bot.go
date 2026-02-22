@@ -124,6 +124,11 @@ func (c *Channel) handleMessageEvent(ctx context.Context, event *MessageEvent) {
 		metadata["sender_open_id"] = sender.SenderID.OpenID
 	}
 
+	// Annotate current message with sender name so LLM knows who is talking in groups.
+	if mc.ChatType == "group" && senderName != "" {
+		content = fmt.Sprintf("[From: %s]\n%s", senderName, content)
+	}
+
 	// 10. Publish to bus
 	c.HandleMessage(mc.SenderID, chatID, content, nil, metadata, peerKind)
 }

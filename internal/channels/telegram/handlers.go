@@ -215,6 +215,12 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		return
 	}
 
+	// Compute sender label for group context (used in history + current message annotation)
+	senderLabel := user.FirstName
+	if user.Username != "" {
+		senderLabel = "@" + user.Username
+	}
+
 	// --- Group mention gating (matching TS mentionGate logic) ---
 	// Also check implicit mention via reply-to-bot
 	if isGroup && c.requireMention {
@@ -235,10 +241,6 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		)
 
 		if !wasMentioned {
-			senderLabel := user.FirstName
-			if user.Username != "" {
-				senderLabel = "@" + user.Username
-			}
 			c.groupHistory.Record(localKey, channels.HistoryEntry{
 				Sender:    senderLabel,
 				Body:      content,
@@ -273,9 +275,15 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 	)
 
 	// Build context from pending group history (if any).
+	// Annotate current message with sender name so LLM knows who is talking.
 	finalContent := content
-	if isGroup && c.historyLimit > 0 {
-		finalContent = c.groupHistory.BuildContext(localKey, content, c.historyLimit)
+	if isGroup {
+		annotated := fmt.Sprintf("[From: %s]\n%s", senderLabel, content)
+		if c.historyLimit > 0 {
+			finalContent = c.groupHistory.BuildContext(localKey, annotated, c.historyLimit)
+		} else {
+			finalContent = annotated
+		}
 	}
 
 	// Send typing indicator (TS ref: buildTypingThreadParams — General topic ID=1 is OK for typing).

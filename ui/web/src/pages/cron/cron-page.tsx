@@ -5,12 +5,14 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
+import { Pagination } from "@/components/shared/pagination";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useCron, type CronJob, type CronRunLogEntry } from "./hooks/use-cron";
 import { CronFormDialog } from "./cron-form-dialog";
 import { CronRunLogDialog } from "./cron-run-log-dialog";
 import { useMinLoading } from "@/hooks/use-min-loading";
+import { usePagination } from "@/hooks/use-pagination";
 
 function formatSchedule(job: CronJob): string {
   const s = job.schedule;
@@ -34,6 +36,8 @@ export function CronPage() {
   const [runLogEntries, setRunLogEntries] = useState<CronRunLogEntry[]>([]);
   const [runLogLoading, setRunLogLoading] = useState(false);
   const [toggleTarget, setToggleTarget] = useState<{ job: CronJob; enabled: boolean } | null>(null);
+
+  const { pageItems, pagination, setPage, setPageSize } = usePagination(jobs);
 
   const handleShowRunLog = async (job: CronJob) => {
     setRunLogTarget(job);
@@ -91,7 +95,7 @@ export function CronPage() {
                 </tr>
               </thead>
               <tbody>
-                {jobs.map((job: CronJob) => (
+                {pageItems.map((job: CronJob) => (
                   <tr key={job.id} className="border-b last:border-0 hover:bg-muted/30">
                     <td className="px-4 py-3">
                       <Switch
@@ -145,6 +149,14 @@ export function CronPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              page={pagination.page}
+              pageSize={pagination.pageSize}
+              total={pagination.total}
+              totalPages={pagination.totalPages}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
           </div>
         )}
       </div>

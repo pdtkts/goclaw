@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
+import { Pagination } from "@/components/shared/pagination";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { useWsEvent } from "@/hooks/use-ws-event";
 import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
@@ -16,23 +17,32 @@ import { useMinLoading } from "@/hooks/use-min-loading";
 import type { AgentEventPayload } from "@/types/chat";
 
 export function TracesPage() {
-  const { traces, loading, load, getTrace } = useTraces();
+  const { traces, total, loading, load, getTrace } = useTraces();
   const spinning = useMinLoading(loading);
   const [agentFilter, setAgentFilter] = useState("");
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   // Ref to capture current filter for debounced callback
   const agentFilterRef = useRef(agentFilter);
   agentFilterRef.current = agentFilter;
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  const pageSizeRef = useRef(pageSize);
+  pageSizeRef.current = pageSize;
 
   useEffect(() => {
-    load({ limit: 50 });
-  }, [load]);
+    load({ limit: pageSize, offset: (page - 1) * pageSize });
+  }, [load, page, pageSize]);
 
   const handleRefresh = () => {
     load({
       agentId: agentFilter || undefined,
-      limit: 50,
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
     });
   };
 
@@ -40,7 +50,8 @@ export function TracesPage() {
   const debouncedRefresh = useDebouncedCallback(() => {
     load({
       agentId: agentFilterRef.current || undefined,
-      limit: 50,
+      limit: pageSizeRef.current,
+      offset: (pageRef.current - 1) * pageSizeRef.current,
     });
   }, 3000);
 
@@ -149,6 +160,14 @@ export function TracesPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              totalPages={totalPages}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+            />
           </div>
         )}
       </div>

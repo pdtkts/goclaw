@@ -100,6 +100,34 @@ func (f *FileSessionStore) List(agentID string) []store.SessionInfo {
 	return result
 }
 
+func (f *FileSessionStore) ListPaged(opts store.SessionListOpts) store.SessionListResult {
+	all := f.List(opts.AgentID)
+	total := len(all)
+
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+
+	return store.SessionListResult{
+		Sessions: all[start:end],
+		Total:    total,
+	}
+}
+
 func (f *FileSessionStore) Save(key string) error {
 	return f.mgr.Save(key)
 }

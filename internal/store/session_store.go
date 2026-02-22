@@ -39,6 +39,19 @@ type SessionInfo struct {
 	Updated      time.Time `json:"updated"`
 }
 
+// SessionListOpts holds pagination options for ListPaged.
+type SessionListOpts struct {
+	AgentID string
+	Limit   int
+	Offset  int
+}
+
+// SessionListResult is the paginated result of ListPaged.
+type SessionListResult struct {
+	Sessions []SessionInfo `json:"sessions"`
+	Total    int           `json:"total"`
+}
+
 // SessionStore manages conversation sessions.
 type SessionStore interface {
 	GetOrCreate(key string) *SessionData
@@ -59,6 +72,7 @@ type SessionStore interface {
 	Reset(key string)
 	Delete(key string) error
 	List(agentID string) []SessionInfo
+	ListPaged(opts SessionListOpts) SessionListResult
 	Save(key string) error
 	LastUsedChannel(agentID string) (channel, chatID string)
 }

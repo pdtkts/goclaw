@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Radio, Plus, RefreshCw, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { SearchInput } from "@/components/shared/search-input";
+import { Pagination } from "@/components/shared/pagination";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useChannels } from "./hooks/use-channels";
 import { useChannelInstances, type ChannelInstanceData, type ChannelInstanceInput } from "./hooks/use-channel-instances";
@@ -13,6 +14,7 @@ import { ChannelInstanceFormDialog } from "./channel-instance-form-dialog";
 import { ChannelsStatusView, channelTypeLabels } from "./channels-status-view";
 import { useAgents } from "@/pages/agents/hooks/use-agents";
 import { useMinLoading } from "@/hooks/use-min-loading";
+import { usePagination } from "@/hooks/use-pagination";
 
 export function ChannelsPage() {
   const { channels, loading: statusLoading, refresh: refreshStatus } = useChannels();
@@ -47,6 +49,10 @@ export function ChannelsPage() {
       (inst.display_name || "").toLowerCase().includes(search.toLowerCase()) ||
       inst.channel_type.toLowerCase().includes(search.toLowerCase()),
   );
+
+  const { pageItems, pagination, setPage, setPageSize, resetPage } = usePagination(filtered);
+
+  useEffect(() => { resetPage(); }, [search, resetPage]);
 
   const handleCreate = async (data: ChannelInstanceInput) => {
     await createInstance(data);
@@ -126,7 +132,7 @@ export function ChannelsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((inst) => {
+                {pageItems.map((inst) => {
                   const status = getStatus(inst.name);
                   return (
                     <tr key={inst.id} className="border-b last:border-0 hover:bg-muted/30">
@@ -194,6 +200,14 @@ export function ChannelsPage() {
                 })}
               </tbody>
             </table>
+            <Pagination
+              page={pagination.page}
+              pageSize={pagination.pageSize}
+              total={pagination.total}
+              totalPages={pagination.totalPages}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
           </div>
         )}
       </div>

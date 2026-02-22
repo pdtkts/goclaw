@@ -206,6 +206,11 @@ func (c *Channel) handleMessage(_ *discordgo.Session, m *discordgo.MessageCreate
 		c.placeholders.Store(channelID, placeholder.ID)
 	}
 
+	// Annotate current message with sender name so LLM knows who is talking in groups.
+	if peerKind == "group" && senderName != "" {
+		content = fmt.Sprintf("[From: %s]\n%s", senderName, content)
+	}
+
 	metadata := map[string]string{
 		"message_id": m.ID,
 		"user_id":    senderID,

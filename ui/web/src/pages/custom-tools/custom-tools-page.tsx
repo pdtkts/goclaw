@@ -1,15 +1,17 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Wrench, Plus, RefreshCw, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { SearchInput } from "@/components/shared/search-input";
+import { Pagination } from "@/components/shared/pagination";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useCustomTools, type CustomToolData, type CustomToolInput } from "./hooks/use-custom-tools";
 import { CustomToolFormDialog } from "./custom-tool-form-dialog";
 import { useMinLoading } from "@/hooks/use-min-loading";
+import { usePagination } from "@/hooks/use-pagination";
 
 export function CustomToolsPage() {
   const { tools, loading, refresh, createTool, updateTool, deleteTool } = useCustomTools();
@@ -25,6 +27,10 @@ export function CustomToolsPage() {
       t.name.toLowerCase().includes(search.toLowerCase()) ||
       t.description.toLowerCase().includes(search.toLowerCase()),
   );
+
+  const { pageItems, pagination, setPage, setPageSize, resetPage } = usePagination(filtered);
+
+  useEffect(() => { resetPage(); }, [search, resetPage]);
 
   const handleCreate = async (data: CustomToolInput) => {
     await createTool(data);
@@ -95,7 +101,7 @@ export function CustomToolsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((tool) => (
+                {pageItems.map((tool) => (
                   <tr key={tool.id} className="border-b last:border-0 hover:bg-muted/30">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -141,6 +147,14 @@ export function CustomToolsPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              page={pagination.page}
+              pageSize={pagination.pageSize}
+              total={pagination.total}
+              totalPages={pagination.totalPages}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
           </div>
         )}
       </div>

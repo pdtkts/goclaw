@@ -278,6 +278,72 @@ func (s *PGSessionStore) List(agentID string) []store.SessionInfo {
 	return result
 }
 
+func (s *PGSessionStore) ListPaged(opts store.SessionListOpts) store.SessionListResult {
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	var where string
+	var whereArgs []interface{}
+
+	if opts.AgentID != "" {
+		where = " WHERE session_key LIKE $1"
+		whereArgs = append(whereArgs, "agent:"+opts.AgentID+":%")
+	}
+
+	// Count total
+	var total int
+	countQ := "SELECT COUNT(*) FROM sessions" + where
+	if err := s.db.QueryRow(countQ, whereArgs...).Scan(&total); err != nil {
+		return store.SessionListResult{Sessions: []store.SessionInfo{}, Total: 0}
+	}
+
+	// Fetch page using jsonb_array_length to avoid loading full messages
+	var selectQ string
+	var selectArgs []interface{}
+
+	if opts.AgentID != "" {
+		selectQ = `SELECT session_key, jsonb_array_length(messages), created_at, updated_at
+		           FROM sessions WHERE session_key LIKE $1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3`
+		selectArgs = []interface{}{whereArgs[0], limit, offset}
+	} else {
+		selectQ = `SELECT session_key, jsonb_array_length(messages), created_at, updated_at
+		           FROM sessions ORDER BY updated_at DESC LIMIT $1 OFFSET $2`
+		selectArgs = []interface{}{limit, offset}
+	}
+
+	rows, err := s.db.Query(selectQ, selectArgs...)
+	if err != nil {
+		return store.SessionListResult{Sessions: []store.SessionInfo{}, Total: total}
+	}
+	defer rows.Close()
+
+	var result []store.SessionInfo
+	for rows.Next() {
+		var key string
+		var msgCount int
+		var createdAt, updatedAt time.Time
+		if err := rows.Scan(&key, &msgCount, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+		result = append(result, store.SessionInfo{
+			Key:          key,
+			MessageCount: msgCount,
+			Created:      createdAt,
+			Updated:      updatedAt,
+		})
+	}
+	if result == nil {
+		result = []store.SessionInfo{}
+	}
+	return store.SessionListResult{Sessions: result, Total: total}
+}
+
 func (s *PGSessionStore) Save(key string) error {
 	s.mu.RLock()
 	data, ok := s.cache[key]

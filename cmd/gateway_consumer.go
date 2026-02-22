@@ -121,7 +121,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 		if peerKind == string(sessions.PeerGroup) {
 			extraPrompt = "You are in a GROUP chat (multiple participants), not a private 1-on-1 DM.\n" +
 				"- Messages may include a [Chat messages since your last reply] section with recent group history. Each history line shows \"sender [time]: message\".\n" +
-				"- The current message (after [Your current message]) is from the person who @mentioned you — their name is NOT included.\n" +
+				"- The current message includes a [From: sender_name] tag identifying who @mentioned you.\n" +
 				"- Keep responses concise and focused; long replies are disruptive in groups.\n" +
 				"- Address the group naturally. If the history shows a multi-person conversation, consider the full context before answering."
 		}

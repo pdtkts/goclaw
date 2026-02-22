@@ -78,6 +78,7 @@ type TracingStore interface {
 	UpdateTrace(ctx context.Context, traceID uuid.UUID, updates map[string]any) error
 	GetTrace(ctx context.Context, traceID uuid.UUID) (*TraceData, error)
 	ListTraces(ctx context.Context, opts TraceListOpts) ([]TraceData, error)
+	CountTraces(ctx context.Context, opts TraceListOpts) (int, error)
 
 	CreateSpan(ctx context.Context, span *SpanData) error
 	UpdateSpan(ctx context.Context, spanID uuid.UUID, updates map[string]any) error

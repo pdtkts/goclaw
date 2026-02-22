@@ -9,20 +9,20 @@ import type { AgentEventPayload } from "@/types/chat";
 export function useSessions(agentFilter?: string) {
   const ws = useWs();
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { limit?: number; offset?: number }) => {
     if (!ws.isConnected) return;
     setLoading(true);
     try {
-      const res = await ws.call<{ sessions: SessionInfo[] }>(Methods.SESSIONS_LIST, {
+      const res = await ws.call<{ sessions: SessionInfo[]; total?: number }>(Methods.SESSIONS_LIST, {
         agentId: agentFilter || undefined,
+        limit: opts?.limit,
+        offset: opts?.offset,
       });
-      const sorted = (res.sessions ?? []).sort(
-        (a: SessionInfo, b: SessionInfo) =>
-          new Date(b.updated).getTime() - new Date(a.updated).getTime(),
-      );
-      setSessions(sorted);
+      setSessions(res.sessions ?? []);
+      setTotal(res.total ?? 0);
     } catch {
       // ignore
     } finally {
@@ -89,5 +89,5 @@ export function useSessions(agentFilter?: string) {
     [ws, load],
   );
 
-  return { sessions, loading, refresh: load, preview, deleteSession, resetSession, patchSession };
+  return { sessions, total, loading, refresh: load, preview, deleteSession, resetSession, patchSession };
 }

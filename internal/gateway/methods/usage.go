@@ -41,12 +41,13 @@ func (m *UsageMethods) handleGet(_ context.Context, client *gateway.Client, req 
 	var params struct {
 		AgentID string `json:"agentId"`
 		Limit   int    `json:"limit"`
+		Offset  int    `json:"offset"`
 	}
 	if req.Params != nil {
 		json.Unmarshal(req.Params, &params)
 	}
 	if params.Limit <= 0 {
-		params.Limit = 50
+		params.Limit = 20
 	}
 
 	sessions := m.sessions.List(params.AgentID)
@@ -79,13 +80,24 @@ func (m *UsageMethods) handleGet(_ context.Context, client *gateway.Client, req 
 		return records[i].Timestamp > records[j].Timestamp
 	})
 
-	// Limit results
-	if len(records) > params.Limit {
-		records = records[:params.Limit]
+	total := len(records)
+
+	// Apply offset + limit
+	offset := params.Offset
+	if offset > total {
+		offset = total
 	}
+	end := offset + params.Limit
+	if end > total {
+		end = total
+	}
+	records = records[offset:end]
 
 	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
 		"records": records,
+		"total":   total,
+		"limit":   params.Limit,
+		"offset":  offset,
 	}))
 }
 

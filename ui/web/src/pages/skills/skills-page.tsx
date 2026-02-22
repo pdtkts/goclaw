@@ -1,16 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Zap, Eye, RefreshCw, Upload, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { SearchInput } from "@/components/shared/search-input";
+import { Pagination } from "@/components/shared/pagination";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useSkills, type SkillInfo } from "./hooks/use-skills";
 import { SkillDetailDialog } from "./skill-detail-dialog";
 import { SkillUploadDialog } from "./skill-upload-dialog";
 import { useMinLoading } from "@/hooks/use-min-loading";
+import { usePagination } from "@/hooks/use-pagination";
 
 export function SkillsPage() {
   const { skills, loading, refresh, getSkill, uploadSkill, deleteSkill } = useSkills();
@@ -27,6 +29,10 @@ export function SkillsPage() {
       s.name.toLowerCase().includes(search.toLowerCase()) ||
       s.description.toLowerCase().includes(search.toLowerCase()),
   );
+
+  const { pageItems, pagination, setPage, setPageSize, resetPage } = usePagination(filtered);
+
+  useEffect(() => { resetPage(); }, [search, resetPage]);
 
   const handleViewSkill = async (name: string) => {
     setDetailLoading(true);
@@ -102,7 +108,7 @@ export function SkillsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((skill: SkillInfo) => (
+                {pageItems.map((skill: SkillInfo) => (
                   <tr key={skill.name} className="border-b last:border-0 hover:bg-muted/30">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -143,6 +149,14 @@ export function SkillsPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              page={pagination.page}
+              pageSize={pagination.pageSize}
+              total={pagination.total}
+              totalPages={pagination.totalPages}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
           </div>
         )}
       </div>

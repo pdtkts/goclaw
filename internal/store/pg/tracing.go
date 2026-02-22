@@ -89,7 +89,7 @@ func (s *PGTracingStore) GetTrace(ctx context.Context, traceID uuid.UUID) (*stor
 	return &d, nil
 }
 
-func (s *PGTracingStore) ListTraces(ctx context.Context, opts store.TraceListOpts) ([]store.TraceData, error) {
+func buildTraceWhere(opts store.TraceListOpts) (string, []interface{}) {
 	var conditions []string
 	var args []interface{}
 	argIdx := 1
@@ -115,14 +115,28 @@ func (s *PGTracingStore) ListTraces(ctx context.Context, opts store.TraceListOpt
 		argIdx++
 	}
 
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
+	}
+	return where, args
+}
+
+func (s *PGTracingStore) CountTraces(ctx context.Context, opts store.TraceListOpts) (int, error) {
+	where, args := buildTraceWhere(opts)
+	var count int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM traces"+where, args...).Scan(&count)
+	return count, err
+}
+
+func (s *PGTracingStore) ListTraces(ctx context.Context, opts store.TraceListOpts) ([]store.TraceData, error) {
+	where, args := buildTraceWhere(opts)
+
 	q := `SELECT id, agent_id, user_id, session_key, run_id, start_time, end_time,
 		 duration_ms, name, channel, input_preview, output_preview,
 		 total_input_tokens, total_output_tokens, span_count, llm_call_count, tool_call_count,
 		 status, error, metadata, tags, created_at
-		 FROM traces`
-	if len(conditions) > 0 {
-		q += " WHERE " + strings.Join(conditions, " AND ")
-	}
+		 FROM traces` + where
 
 	limit := opts.Limit
 	if limit <= 0 {

@@ -76,7 +76,14 @@ func (h *TracesHandler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"traces": traces})
+	total, _ := h.tracing.CountTraces(r.Context(), opts)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"traces": traces,
+		"total":  total,
+		"limit":  opts.Limit,
+		"offset": opts.Offset,
+	})
 }
 
 func (h *TracesHandler) handleGet(w http.ResponseWriter, r *http.Request) {

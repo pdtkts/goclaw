@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router";
 import { History } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { SearchInput } from "@/components/shared/search-input";
+import { Pagination } from "@/components/shared/pagination";
 import { Badge } from "@/components/ui/badge";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { useSessions } from "./hooks/use-sessions";
@@ -15,8 +16,16 @@ import type { SessionInfo } from "@/types/session";
 export function SessionsPage() {
   const { key: detailKey } = useParams<{ key: string }>();
   const navigate = useNavigate();
-  const { sessions, loading, preview, deleteSession, resetSession } = useSessions();
+  const { sessions, total, loading, refresh, preview, deleteSession, resetSession } = useSessions();
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  useEffect(() => {
+    refresh({ limit: pageSize, offset: (page - 1) * pageSize });
+  }, [page, pageSize]);
 
   const detailSession = detailKey
     ? sessions.find((s) => s.key === decodeURIComponent(detailKey))
@@ -90,6 +99,14 @@ export function SessionsPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              totalPages={totalPages}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+            />
           </div>
         )}
       </div>

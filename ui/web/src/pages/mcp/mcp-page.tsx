@@ -1,16 +1,18 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Plug, Plus, RefreshCw, Pencil, Trash2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { SearchInput } from "@/components/shared/search-input";
+import { Pagination } from "@/components/shared/pagination";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import { useMCP, type MCPServerData, type MCPServerInput } from "./hooks/use-mcp";
 import { MCPFormDialog } from "./mcp-form-dialog";
 import { MCPGrantsDialog } from "./mcp-grants-dialog";
 import { useMinLoading } from "@/hooks/use-min-loading";
+import { usePagination } from "@/hooks/use-pagination";
 
 const transportBadge: Record<string, string> = {
   stdio: "default",
@@ -33,6 +35,10 @@ export function MCPPage() {
       s.name.toLowerCase().includes(search.toLowerCase()) ||
       (s.display_name || "").toLowerCase().includes(search.toLowerCase()),
   );
+
+  const { pageItems, pagination, setPage, setPageSize, resetPage } = usePagination(filtered);
+
+  useEffect(() => { resetPage(); }, [search, resetPage]);
 
   const handleCreate = async (data: MCPServerInput) => {
     await createServer(data);
@@ -103,7 +109,7 @@ export function MCPPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((srv) => (
+                {pageItems.map((srv) => (
                   <tr key={srv.id} className="border-b last:border-0 hover:bg-muted/30">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -163,6 +169,14 @@ export function MCPPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              page={pagination.page}
+              pageSize={pagination.pageSize}
+              total={pagination.total}
+              totalPages={pagination.totalPages}
+              onPageChange={setPage}
+              onPageSizeChange={setPageSize}
+            />
           </div>
         )}
       </div>

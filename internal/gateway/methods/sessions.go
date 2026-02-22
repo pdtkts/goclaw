@@ -28,6 +28,8 @@ func (m *SessionsMethods) Register(router *gateway.MethodRouter) {
 
 type sessionsListParams struct {
 	AgentID string `json:"agentId"`
+	Limit   int    `json:"limit"`
+	Offset  int    `json:"offset"`
 }
 
 func (m *SessionsMethods) handleList(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
@@ -36,9 +38,20 @@ func (m *SessionsMethods) handleList(_ context.Context, client *gateway.Client, 
 		json.Unmarshal(req.Params, &params)
 	}
 
-	infos := m.sessions.List(params.AgentID)
+	if params.Limit <= 0 {
+		params.Limit = 20
+	}
+
+	result := m.sessions.ListPaged(store.SessionListOpts{
+		AgentID: params.AgentID,
+		Limit:   params.Limit,
+		Offset:  params.Offset,
+	})
 	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
-		"sessions": infos,
+		"sessions": result.Sessions,
+		"total":    result.Total,
+		"limit":    params.Limit,
+		"offset":   params.Offset,
 	}))
 }
 
