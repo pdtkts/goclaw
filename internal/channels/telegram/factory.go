@@ -29,9 +29,23 @@ type telegramInstanceConfig struct {
 	AllowFrom      []string `json:"allow_from,omitempty"`
 }
 
-// Factory creates a Telegram channel from DB instance data.
+// Factory creates a Telegram channel from DB instance data (no agent store = no group file writer commands).
 func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 	msgBus *bus.MessageBus, pairingSvc store.PairingStore) (channels.Channel, error) {
+	return buildChannel(name, creds, cfg, msgBus, pairingSvc, nil)
+}
+
+// FactoryWithAgentStore returns a ChannelFactory that includes the agent store
+// for group file writer management (/addwriter, /removewriter, /writers commands).
+func FactoryWithAgentStore(agentStore store.AgentStore) channels.ChannelFactory {
+	return func(name string, creds json.RawMessage, cfg json.RawMessage,
+		msgBus *bus.MessageBus, pairingSvc store.PairingStore) (channels.Channel, error) {
+		return buildChannel(name, creds, cfg, msgBus, pairingSvc, agentStore)
+	}
+}
+
+func buildChannel(name string, creds json.RawMessage, cfg json.RawMessage,
+	msgBus *bus.MessageBus, pairingSvc store.PairingStore, agentStore store.AgentStore) (channels.Channel, error) {
 
 	var c telegramCreds
 	if len(creds) > 0 {
@@ -71,7 +85,7 @@ func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 		tgCfg.GroupPolicy = "pairing"
 	}
 
-	ch, err := New(tgCfg, msgBus, pairingSvc)
+	ch, err := New(tgCfg, msgBus, pairingSvc, agentStore)
 	if err != nil {
 		return nil, err
 	}

@@ -24,13 +24,14 @@ type Channel struct {
 	bot              *telego.Bot
 	config           config.TelegramConfig
 	pairingService   store.PairingStore
-	placeholders     sync.Map // localKey string → messageID int
-	stopThinking     sync.Map // localKey string → *thinkingCancel
-	streams          sync.Map // localKey string → *DraftStream (streaming preview)
-	reactions        sync.Map // localKey string → *StatusReactionController
-	pairingReplySent sync.Map // userID string → time.Time (debounce pairing replies)
-	threadIDs        sync.Map // localKey string → messageThreadID int (for forum topic routing)
-	approvedGroups   sync.Map // chatIDStr string → true (cached group pairing approval)
+	agentStore       store.AgentStore // for group file writer management (nil in standalone)
+	placeholders     sync.Map         // localKey string → messageID int
+	stopThinking     sync.Map         // localKey string → *thinkingCancel
+	streams          sync.Map         // localKey string → *DraftStream (streaming preview)
+	reactions        sync.Map         // localKey string → *StatusReactionController
+	pairingReplySent sync.Map         // userID string → time.Time (debounce pairing replies)
+	threadIDs        sync.Map         // localKey string → messageThreadID int (for forum topic routing)
+	approvedGroups   sync.Map         // chatIDStr string → true (cached group pairing approval)
 	groupHistory     *channels.PendingHistory
 	historyLimit     int
 	requireMention   bool
@@ -50,7 +51,8 @@ func (c *thinkingCancel) Cancel() {
 
 // New creates a new Telegram channel from config.
 // pairingSvc is optional (nil = fall back to allowlist only).
-func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore) (*Channel, error) {
+// agentStore is optional (nil = group file writer commands disabled).
+func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore, agentStore store.AgentStore) (*Channel, error) {
 	var opts []telego.BotOption
 
 	if cfg.Proxy != "" {
@@ -87,6 +89,7 @@ func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.Pai
 		bot:            bot,
 		config:         cfg,
 		pairingService: pairingSvc,
+		agentStore:     agentStore,
 		groupHistory:   channels.NewPendingHistory(),
 		historyLimit:   historyLimit,
 		requireMention: requireMention,

@@ -210,8 +210,8 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		content = "[empty message]"
 	}
 
-	// Handle bot commands (/start, /help, /reset, /status).
-	if handled := c.handleBotCommand(ctx, chatID, chatIDStr, localKey, content, senderID, isGroup, isForum, messageThreadID); handled {
+	// Handle bot commands (/start, /help, /reset, /status, /addwriter, /removewriter, /writers).
+	if handled := c.handleBotCommand(ctx, message, chatID, chatIDStr, localKey, content, senderID, isGroup, isForum, messageThreadID); handled {
 		return
 	}
 

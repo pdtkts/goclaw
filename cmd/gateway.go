@@ -610,7 +610,7 @@ func runGateway() {
 	var loadedNames map[string]struct{}
 	if managedStores != nil && managedStores.ChannelInstances != nil {
 		instanceLoader = channels.NewInstanceLoader(managedStores.ChannelInstances, managedStores.Agents, channelMgr, msgBus, pairingStore)
-		instanceLoader.RegisterFactory("telegram", telegram.Factory)
+		instanceLoader.RegisterFactory("telegram", telegram.FactoryWithAgentStore(managedStores.Agents))
 		instanceLoader.RegisterFactory("discord", discord.Factory)
 		instanceLoader.RegisterFactory("feishu", feishu.Factory)
 		instanceLoader.RegisterFactory("zalo_oa", zalo.Factory)
@@ -626,7 +626,7 @@ func runGateway() {
 	// Other channels: skip config registration in managed mode if any DB instances loaded.
 	if cfg.Channels.Telegram.Enabled && cfg.Channels.Telegram.Token != "" {
 		if _, loaded := loadedNames["telegram"]; !loaded {
-			tg, err := telegram.New(cfg.Channels.Telegram, msgBus, pairingStore)
+			tg, err := telegram.New(cfg.Channels.Telegram, msgBus, pairingStore, nil)
 			if err != nil {
 				slog.Error("failed to initialize telegram channel", "error", err)
 			} else {

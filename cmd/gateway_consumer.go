@@ -134,6 +134,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			ChatID:            msg.ChatID,
 			PeerKind:          peerKind,
 			UserID:            userID,
+			SenderID:          msg.SenderID,
 			RunID:             runID,
 			Stream:            enableStream,
 			HistoryLimit:      msg.HistoryLimit,

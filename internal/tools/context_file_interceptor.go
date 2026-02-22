@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +14,16 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
+
+// protectedFileSet defines files that require group file writer permission in group chats.
+// These files control the agent's identity and behavior — only allowlisted users can modify them.
+var protectedFileSet = map[string]bool{
+	"SOUL.md":      true,
+	"IDENTITY.md":  true,
+	"AGENTS.md":    true,
+	"HEARTBEAT.md": true,
+	"USER.md":      true,
+}
 
 // contextFileSet is the set of filenames routed to DB in managed mode.
 var contextFileSet = map[string]bool{
@@ -232,6 +244,23 @@ func (b *ContextFileInterceptor) WriteFile(ctx context.Context, path, content st
 
 	userID := store.UserIDFromContext(ctx)
 	agentType := store.AgentTypeFromContext(ctx)
+
+	// Permission check: protected files in group context require allowlist membership.
+	if strings.HasPrefix(userID, "group:") && protectedFileSet[fileName] {
+		senderID := store.SenderIDFromContext(ctx)
+		if senderID != "" {
+			numericID := strings.SplitN(senderID, "|", 2)[0]
+			isWriter, err := b.agentStore.IsGroupFileWriter(ctx, agentID, userID, numericID)
+			if err != nil {
+				slog.Warn("security.group_file_writer_check_failed",
+					"error", err, "sender", numericID, "file", fileName, "group", userID)
+				// fail open: allow write if DB check fails
+			} else if !isWriter {
+				return true, fmt.Errorf("permission denied: you are not authorized to modify %s in this group. Ask a group file writer to add you with /addwriter", fileName)
+			}
+		}
+		// senderID empty = system context (cron, subagent) → fail open
+	}
 
 	// BOOTSTRAP.md deletion: empty content = first-run completed → delete row
 	if fileName == "BOOTSTRAP.md" && content == "" && userID != "" {

@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -60,6 +61,23 @@ func wireManagedExtras(
 			if !isNew {
 				return nil // already profiled = already seeded
 			}
+
+			// Auto-add first group member as a file writer (bootstrap the allowlist).
+			if strings.HasPrefix(userID, "group:") {
+				senderID := store.SenderIDFromContext(ctx)
+				if senderID != "" {
+					parts := strings.SplitN(senderID, "|", 2)
+					numericID := parts[0]
+					senderUsername := ""
+					if len(parts) > 1 {
+						senderUsername = parts[1]
+					}
+					if addErr := as.AddGroupFileWriter(ctx, agentID, userID, numericID, "", senderUsername); addErr != nil {
+						slog.Warn("failed to auto-add group file writer", "error", addErr, "sender", numericID, "group", userID)
+					}
+				}
+			}
+
 			_, err = bootstrap.SeedUserFiles(ctx, as, agentID, userID, agentType)
 			return err
 		}

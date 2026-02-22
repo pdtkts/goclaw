@@ -205,6 +205,7 @@ type RunRequest struct {
 	PeerKind         string // "direct" or "group" (for session key building and tool context)
 	RunID            string // unique run identifier
 	UserID           string // external user ID (TEXT, free-form) for multi-tenant scoping
+	SenderID         string // original individual sender ID (preserved in group chats for permission checks)
 	Stream           bool   // whether to stream response chunks
 	ExtraSystemPrompt string // optional: injected into system prompt (skills, subagent context, etc.)
 	HistoryLimit     int    // max user turns to keep in context (0=unlimited, from channel config)
@@ -313,6 +314,10 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	// Inject agent type into context for interceptor routing (managed mode)
 	if l.agentType != "" {
 		ctx = store.WithAgentType(ctx, l.agentType)
+	}
+	// Inject original sender ID for group file writer permission checks
+	if req.SenderID != "" {
+		ctx = store.WithSenderID(ctx, req.SenderID)
 	}
 
 	// Ensure per-user context files exist (first-chat seeding, managed mode)

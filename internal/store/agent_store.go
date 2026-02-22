@@ -167,4 +167,17 @@ type AgentStore interface {
 
 	// User-agent profiles
 	GetOrCreateUserProfile(ctx context.Context, agentID uuid.UUID, userID, workspace string) (isNew bool, err error)
+
+	// Group file writers (allowlist for protected file edits in group chats)
+	IsGroupFileWriter(ctx context.Context, agentID uuid.UUID, groupID, userID string) (bool, error)
+	AddGroupFileWriter(ctx context.Context, agentID uuid.UUID, groupID, userID, displayName, username string) error
+	RemoveGroupFileWriter(ctx context.Context, agentID uuid.UUID, groupID, userID string) error
+	ListGroupFileWriters(ctx context.Context, agentID uuid.UUID, groupID string) ([]GroupFileWriterData, error)
+}
+
+// GroupFileWriterData represents a group file writer entry.
+type GroupFileWriterData struct {
+	UserID      string  `json:"user_id"`
+	DisplayName *string `json:"display_name,omitempty"`
+	Username    *string `json:"username,omitempty"`
 }
