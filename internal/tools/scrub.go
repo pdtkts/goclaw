@@ -19,6 +19,15 @@ var credentialPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`AKIA[A-Z0-9]{16}`),
 	// Generic key=value patterns (case-insensitive)
 	regexp.MustCompile(`(?i)(api[_-]?key|token|secret|password|bearer|authorization)\s*[:=]\s*["']?\S{8,}["']?`),
+
+	// Connection strings (PostgreSQL, MySQL, MongoDB, Redis, AMQP)
+	regexp.MustCompile(`(?i)(postgres|postgresql|mysql|mongodb|redis|amqp)://[^\s"']+`),
+	// Generic KEY=/SECRET=/CREDENTIAL= env-var patterns (skip already-redacted [REDACTED] values)
+	regexp.MustCompile(`(?i)[A-Z_]*(KEY|SECRET|CREDENTIAL|PRIVATE)[A-Z_]*\s*=\s*[^\[\s]{8,}`),
+	// DSN/DATABASE_URL env vars (skip already-redacted values)
+	regexp.MustCompile(`(?i)(DSN|DATABASE_URL|REDIS_URL|MONGO_URI)\s*=\s*[^\[\s]{8,}`),
+	// Long hex strings (64+ chars) — likely encryption keys, hashes, or secrets
+	regexp.MustCompile(`[a-fA-F0-9]{64,}`),
 }
 
 const redactedPlaceholder = "[REDACTED]"

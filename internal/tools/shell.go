@@ -107,6 +107,16 @@ var defaultDenyPatterns = []*regexp.Regexp{
 	// ── Process manipulation ──
 	regexp.MustCompile(`\bkill\s+-9\s`),
 	regexp.MustCompile(`\b(killall|pkill)\b`),
+
+	// ── Environment variable dumping ──
+	// Bare env/printenv/set/export dumps all vars including secrets (API keys, DSN, encryption keys).
+	// 'env VAR=val cmd' (env with assignment before command) is still allowed.
+	regexp.MustCompile(`^\s*env\s*$`),                                     // bare 'env'
+	regexp.MustCompile(`^\s*env\s*\|`),                                    // 'env | ...' (piped)
+	regexp.MustCompile(`^\s*env\s*>\s`),                                   // 'env > file'
+	regexp.MustCompile(`\bprintenv\b`),                                    // any printenv usage
+	regexp.MustCompile(`^\s*(set|export\s+-p|declare\s+-x)\s*($|\|)`),     // shell var dumps
+	regexp.MustCompile(`\bcompgen\s+-e\b`),                                // bash env completion dump
 }
 
 // ExecTool executes shell commands, optionally inside a sandbox container.
