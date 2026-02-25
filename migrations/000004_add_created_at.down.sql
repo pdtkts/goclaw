@@ -1,9 +1,0 @@
-ALTER TABLE agent_context_files DROP COLUMN IF EXISTS created_at;
-ALTER TABLE config_secrets DROP COLUMN IF EXISTS created_at;
-ALTER TABLE cron_run_logs DROP COLUMN IF EXISTS created_at;
-ALTER TABLE embedding_cache DROP COLUMN IF EXISTS created_at;
-ALTER TABLE memory_chunks DROP COLUMN IF EXISTS created_at;
-ALTER TABLE memory_documents DROP COLUMN IF EXISTS created_at;
-ALTER TABLE user_context_files DROP COLUMN IF EXISTS created_at;
-ALTER TABLE user_agent_overrides DROP COLUMN IF EXISTS created_at;
-ALTER TABLE user_agent_overrides DROP COLUMN IF EXISTS updated_at;

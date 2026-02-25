@@ -89,6 +89,7 @@ CREATE TABLE agent_context_files (
     agent_id   UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
     file_name  VARCHAR(255) NOT NULL,
     content    TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(agent_id, file_name)
 );
@@ -99,6 +100,7 @@ CREATE TABLE user_context_files (
     user_id    VARCHAR(255) NOT NULL,
     file_name  VARCHAR(255) NOT NULL,
     content    TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(agent_id, user_id, file_name)
 );
@@ -119,6 +121,8 @@ CREATE TABLE user_agent_overrides (
     provider VARCHAR(50),
     model    VARCHAR(200),
     settings JSONB NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(agent_id, user_id)
 );
 
@@ -163,6 +167,7 @@ CREATE TABLE memory_documents (
     path       VARCHAR(500) NOT NULL,
     content    TEXT NOT NULL DEFAULT '',
     hash       VARCHAR(64) NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -182,6 +187,7 @@ CREATE TABLE memory_chunks (
     embedding   vector(1536),
     tsv         tsvector GENERATED ALWAYS AS (to_tsvector('simple', text)) STORED,
     -- NOTE: 'simple' config (no stemming) works correctly for Vietnamese and other non-English languages
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
     updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -197,6 +203,7 @@ CREATE TABLE embedding_cache (
     model     VARCHAR(200) NOT NULL,
     embedding vector(1536),
     dims      INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (hash, provider, model)
 );
@@ -260,10 +267,12 @@ CREATE INDEX idx_skill_user_grants_user ON skill_user_grants(user_id);
 CREATE TABLE cron_jobs (
     id               UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     agent_id         UUID REFERENCES agents(id),
+    user_id          TEXT,
     name             VARCHAR(255) NOT NULL,
     enabled          BOOLEAN NOT NULL DEFAULT true,
     schedule_kind    VARCHAR(10) NOT NULL,
     cron_expression  VARCHAR(100),
+    interval_ms      BIGINT,
     run_at           TIMESTAMPTZ,
     timezone         VARCHAR(50),
     payload          JSONB NOT NULL,
@@ -276,6 +285,9 @@ CREATE TABLE cron_jobs (
     updated_at       TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE INDEX idx_cron_jobs_user_id ON cron_jobs(user_id);
+CREATE INDEX idx_cron_jobs_agent_user ON cron_jobs(agent_id, user_id);
+
 CREATE TABLE cron_run_logs (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     job_id        UUID NOT NULL REFERENCES cron_jobs(id) ON DELETE CASCADE,
@@ -286,7 +298,8 @@ CREATE TABLE cron_run_logs (
     duration_ms   INT,
     input_tokens  INT DEFAULT 0,
     output_tokens INT DEFAULT 0,
-    ran_at        TIMESTAMPTZ DEFAULT NOW()
+    ran_at        TIMESTAMPTZ DEFAULT NOW(),
+    created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_cron_run_logs_job ON cron_run_logs(job_id, ran_at DESC);
@@ -513,5 +526,20 @@ CREATE INDEX idx_channel_instances_agent ON channel_instances(agent_id);
 CREATE TABLE config_secrets (
     key         VARCHAR(100) PRIMARY KEY,
     value       BYTEA NOT NULL,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
     updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ============================================================
+-- 14. Group File Writers (Telegram group write permissions)
+-- ============================================================
+
+CREATE TABLE group_file_writers (
+    agent_id     UUID NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    group_id     VARCHAR(255) NOT NULL,
+    user_id      VARCHAR(255) NOT NULL,
+    display_name VARCHAR(255),
+    username     VARCHAR(255),
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (agent_id, group_id, user_id)
 );

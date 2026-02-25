@@ -1,6 +1,9 @@
 -- Reverse of 000001_init_schema.up.sql
 -- Drop in reverse dependency order
 
+-- 14. Group File Writers
+DROP TABLE IF EXISTS group_file_writers CASCADE;
+
 -- 13. Config Secrets
 DROP TABLE IF EXISTS config_secrets CASCADE;
 
