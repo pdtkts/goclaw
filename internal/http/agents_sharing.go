@@ -23,7 +23,7 @@ func (h *AgentsHandler) handleListShares(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
 		return
 	}
-	if userID != "" && ag.OwnerID != userID {
+	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can view shares"})
 		return
 	}
@@ -51,7 +51,7 @@ func (h *AgentsHandler) handleShare(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
 		return
 	}
-	if userID != "" && ag.OwnerID != userID {
+	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can share agent"})
 		return
 	}
@@ -98,7 +98,7 @@ func (h *AgentsHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
 		return
 	}
-	if userID != "" && ag.OwnerID != userID {
+	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can revoke shares"})
 		return
 	}
@@ -130,7 +130,7 @@ func (h *AgentsHandler) handleRegenerate(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
 		return
 	}
-	if userID != "" && ag.OwnerID != userID {
+	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can regenerate agent"})
 		return
 	}
@@ -181,7 +181,7 @@ func (h *AgentsHandler) handleResummon(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
 		return
 	}
-	if userID != "" && ag.OwnerID != userID {
+	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can resummon agent"})
 		return
 	}

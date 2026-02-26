@@ -106,6 +106,12 @@ const (
 	MethodTeamsTaskList = "teams.tasks.list"
 )
 
+// Delegation history (managed mode)
+const (
+	MethodDelegationsList = "delegations.list"
+	MethodDelegationsGet  = "delegations.get"
+)
+
 // Phase 3+ - NICE TO HAVE methods
 const (
 	MethodLogsTail = "logs.tail"

@@ -13,6 +13,7 @@ export const ROUTES = {
   CONFIG: "/config",
   TRACES: "/traces",
   TRACE_DETAIL: "/traces/:id",
+  DELEGATIONS: "/delegations",
   USAGE: "/usage",
   CHANNELS: "/channels",
   APPROVALS: "/approvals",

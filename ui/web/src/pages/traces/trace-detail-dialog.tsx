@@ -99,6 +99,13 @@ export function TraceDetailDialog({ traceId, onClose, getTrace, onNavigateTrace 
               <div>
                 <span className="text-muted-foreground">Tokens:</span>{" "}
                 {formatTokens(trace.total_input_tokens)} in / {formatTokens(trace.total_output_tokens)} out
+                {((trace.metadata?.total_cache_read_tokens ?? 0) > 0 || (trace.metadata?.total_cache_creation_tokens ?? 0) > 0) && (
+                  <span className="ml-1 text-xs">
+                    {(trace.metadata?.total_cache_read_tokens ?? 0) > 0 && (
+                      <span className="text-green-400">{formatTokens(trace.metadata!.total_cache_read_tokens!)} cached</span>
+                    )}
+                  </span>
+                )}
               </div>
               <div>
                 <span className="text-muted-foreground">Spans:</span>{" "}
@@ -205,6 +212,11 @@ function SpanTreeNode({ node, depth }: { node: SpanNode; depth: number }) {
             {(span.input_tokens > 0 || span.output_tokens > 0) && (
               <span className="shrink-0 text-xs text-muted-foreground">
                 {formatTokens(span.input_tokens)}/{formatTokens(span.output_tokens)}
+                {(span.metadata?.cache_read_tokens ?? 0) > 0 && (
+                  <span className="ml-1 text-green-400" title="Cached tokens read">
+                    ({formatTokens(span.metadata!.cache_read_tokens!)} cached)
+                  </span>
+                )}
               </span>
             )}
             <span className="shrink-0 text-xs text-muted-foreground">
@@ -226,6 +238,18 @@ function SpanTreeNode({ node, depth }: { node: SpanNode; depth: number }) {
               <div className="text-xs">
                 <span className="text-muted-foreground">Tokens:</span>{" "}
                 {formatTokens(span.input_tokens)} in / {formatTokens(span.output_tokens)} out
+                {((span.metadata?.cache_creation_tokens ?? 0) > 0 || (span.metadata?.cache_read_tokens ?? 0) > 0) && (
+                  <span className="ml-2 text-muted-foreground">
+                    (cache:
+                    {(span.metadata?.cache_read_tokens ?? 0) > 0 && (
+                      <span className="ml-1 text-green-400">{formatTokens(span.metadata!.cache_read_tokens!)} read</span>
+                    )}
+                    {(span.metadata?.cache_creation_tokens ?? 0) > 0 && (
+                      <span className="ml-1 text-yellow-400">{formatTokens(span.metadata!.cache_creation_tokens!)} write</span>
+                    )}
+                    )
+                  </span>
+                )}
               </div>
             )}
             {span.input_preview && (

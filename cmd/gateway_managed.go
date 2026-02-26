@@ -9,6 +9,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
+	"github.com/nextlevelbuilder/goclaw/internal/hooks"
 	httpapi "github.com/nextlevelbuilder/goclaw/internal/http"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
@@ -270,6 +271,28 @@ func wireManagedExtras(
 			delegateMgr.SetTeamStore(stores.Teams)
 		}
 		delegateMgr.SetSessionStore(stores.Sessions)
+
+		// Hook engine (quality gates)
+		hookEngine := hooks.NewEngine()
+		hookEngine.RegisterEvaluator(hooks.HookTypeCommand, hooks.NewCommandEvaluator(workspace))
+		agentEvalFn := func(ctx context.Context, agentKey, task string) (string, error) {
+			result, err := delegateMgr.Delegate(hooks.WithSkipHooks(ctx, true), tools.DelegateOpts{
+				TargetAgentKey: agentKey, Task: task, Mode: "sync",
+			})
+			if err != nil {
+				return "", err
+			}
+			return result.Content, nil
+		}
+		hookEngine.RegisterEvaluator(hooks.HookTypeAgent, hooks.NewAgentEvaluator(agentEvalFn))
+		delegateMgr.SetHookEngine(hookEngine)
+
+		// Evaluate-optimize loop tool
+		toolsReg.Register(tools.NewEvaluateLoopTool(delegateMgr))
+
+		// Handoff tool (agent-to-agent conversation transfer)
+		toolsReg.Register(tools.NewHandoffTool(delegateMgr, stores.Teams, stores.Sessions, msgBus))
+
 		toolsReg.Register(tools.NewDelegateTool(delegateMgr))
 
 		// Register delegate_search tool (hybrid FTS + semantic agent discovery)
@@ -307,8 +330,8 @@ func wireManagedExtras(
 	slog.Info("managed mode: resolver + interceptors + cache subscribers wired")
 }
 
-// wireManagedHTTP creates managed-mode HTTP handlers (agents + skills + traces + MCP + custom tools + channel instances + providers).
-func wireManagedHTTP(stores *store.Stores, token string, msgBus *bus.MessageBus, toolsReg *tools.Registry, providerReg *providers.Registry) (*httpapi.AgentsHandler, *httpapi.SkillsHandler, *httpapi.TracesHandler, *httpapi.MCPHandler, *httpapi.CustomToolsHandler, *httpapi.ChannelInstancesHandler, *httpapi.ProvidersHandler) {
+// wireManagedHTTP creates managed-mode HTTP handlers (agents + skills + traces + MCP + custom tools + channel instances + providers + delegations).
+func wireManagedHTTP(stores *store.Stores, token string, msgBus *bus.MessageBus, toolsReg *tools.Registry, providerReg *providers.Registry, isOwner func(string) bool) (*httpapi.AgentsHandler, *httpapi.SkillsHandler, *httpapi.TracesHandler, *httpapi.MCPHandler, *httpapi.CustomToolsHandler, *httpapi.ChannelInstancesHandler, *httpapi.ProvidersHandler, *httpapi.DelegationsHandler) {
 	var agentsH *httpapi.AgentsHandler
 	var skillsH *httpapi.SkillsHandler
 	var tracesH *httpapi.TracesHandler
@@ -316,13 +339,14 @@ func wireManagedHTTP(stores *store.Stores, token string, msgBus *bus.MessageBus,
 	var customToolsH *httpapi.CustomToolsHandler
 	var channelInstancesH *httpapi.ChannelInstancesHandler
 	var providersH *httpapi.ProvidersHandler
+	var delegationsH *httpapi.DelegationsHandler
 
 	if stores != nil && stores.Agents != nil {
 		var summoner *httpapi.AgentSummoner
 		if providerReg != nil {
 			summoner = httpapi.NewAgentSummoner(stores.Agents, providerReg, msgBus)
 		}
-		agentsH = httpapi.NewAgentsHandler(stores.Agents, token, msgBus, summoner)
+		agentsH = httpapi.NewAgentsHandler(stores.Agents, token, msgBus, summoner, isOwner)
 	}
 
 	if stores != nil && stores.Skills != nil {
@@ -354,5 +378,9 @@ func wireManagedHTTP(stores *store.Stores, token string, msgBus *bus.MessageBus,
 		providersH = httpapi.NewProvidersHandler(stores.Providers, token, providerReg)
 	}
 
-	return agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH
+	if stores != nil && stores.Teams != nil {
+		delegationsH = httpapi.NewDelegationsHandler(stores.Teams, token)
+	}
+
+	return agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH, delegationsH
 }

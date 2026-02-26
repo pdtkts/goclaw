@@ -54,6 +54,15 @@ func (sm *SubagentManager) emitLLMSpan(ctx context.Context, start time.Time, ite
 		if resp.Usage != nil {
 			span.InputTokens = resp.Usage.PromptTokens
 			span.OutputTokens = resp.Usage.CompletionTokens
+			if resp.Usage.CacheCreationTokens > 0 || resp.Usage.CacheReadTokens > 0 {
+				meta := map[string]int{
+					"cache_creation_tokens": resp.Usage.CacheCreationTokens,
+					"cache_read_tokens":     resp.Usage.CacheReadTokens,
+				}
+				if b, err := json.Marshal(meta); err == nil {
+					span.Metadata = b
+				}
+			}
 		}
 		span.FinishReason = resp.FinishReason
 		span.OutputPreview = truncate(resp.Content, 500)

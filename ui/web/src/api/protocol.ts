@@ -130,6 +130,10 @@ export const Methods = {
   TEAMS_DELETE: "teams.delete",
   TEAMS_TASK_LIST: "teams.tasks.list",
 
+  // Delegation history (managed mode)
+  DELEGATIONS_LIST: "delegations.list",
+  DELEGATIONS_GET: "delegations.get",
+
   // Phase 3+ - NICE TO HAVE
   LOGS_TAIL: "logs.tail",
   HEARTBEAT: "heartbeat",
@@ -155,6 +159,7 @@ export const Events = {
   CONNECT_CHALLENGE: "connect.challenge",
   HEARTBEAT: "heartbeat",
   TALK_MODE: "talk.mode",
+  HANDOFF: "handoff",
 } as const;
 
 // Agent event subtypes (in payload.type)

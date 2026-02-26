@@ -64,6 +64,16 @@ export interface MemoryConfig {
   text_weight?: number;
 }
 
+export interface QualityGateConfig {
+  event: string;
+  type: "agent" | "command";
+  agent?: string;
+  command?: string;
+  block_on_failure: boolean;
+  max_retries?: number;
+  timeout_seconds?: number;
+}
+
 export interface AgentData {
   id: string;
   agent_key: string;

@@ -5,20 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"regexp"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/hooks"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tracing"
 )
-
-// teamTaskIDRe extracts a team task UUID from delegate messages.
-// Matches patterns like "task id 019c953d-06b3-..." or "task_id: 019c953d-06b3-..."
-var teamTaskIDRe = regexp.MustCompile(`task[_ ]id[:\s]+([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`)
 
 const defaultMaxDelegationLoad = 5
 
@@ -109,6 +105,7 @@ type DelegateManager struct {
 	teamStore    store.TeamStore     // optional: enables auto-complete of team tasks
 	sessionStore store.SessionStore  // optional: enables session cleanup
 	msgBus       *bus.MessageBus     // for event broadcast + async announce (PublishInbound)
+	hookEngine   *hooks.Engine       // optional: quality gate evaluation
 
 	active            sync.Map // delegationID → *DelegationTask
 	completedMu       sync.Mutex
@@ -140,6 +137,11 @@ func (dm *DelegateManager) SetSessionStore(ss store.SessionStore) {
 	dm.sessionStore = ss
 }
 
+// SetHookEngine enables quality gate evaluation on delegation results.
+func (dm *DelegateManager) SetHookEngine(engine *hooks.Engine) {
+	dm.hookEngine = engine
+}
+
 // Delegate executes a synchronous delegation to another agent.
 func (dm *DelegateManager) Delegate(ctx context.Context, opts DelegateOpts) (*DelegateResult, error) {
 	task, _, err := dm.prepareDelegation(ctx, opts, "sync")
@@ -164,17 +166,29 @@ func (dm *DelegateManager) Delegate(ctx context.Context, opts DelegateOpts) (*De
 		delegateCtx = tracing.WithDelegateParentTraceID(ctx, parentTraceID)
 	}
 
+	startTime := time.Now()
 	result, err := dm.runAgent(delegateCtx, opts.TargetAgentKey, dm.buildRunRequest(task, message))
+	duration := time.Since(startTime)
 	if err != nil {
 		task.Status = "failed"
 		dm.emitEvent("delegation.failed", task)
+		dm.saveDelegationHistory(task, "", err, duration)
 		return nil, fmt.Errorf("delegation to %q failed: %w", opts.TargetAgentKey, err)
+	}
+
+	// Apply quality gates before marking completed.
+	if result, err = dm.applyQualityGates(delegateCtx, task, opts, result); err != nil {
+		task.Status = "failed"
+		dm.emitEvent("delegation.failed", task)
+		dm.saveDelegationHistory(task, "", err, duration)
+		return nil, fmt.Errorf("delegation to %q failed quality gate: %w", opts.TargetAgentKey, err)
 	}
 
 	task.Status = "completed"
 	dm.emitEvent("delegation.completed", task)
 	dm.trackCompleted(task)
 	dm.autoCompleteTeamTask(task, result.Content)
+	dm.saveDelegationHistory(task, result.Content, nil, duration)
 	slog.Info("delegation completed", "id", task.ID, "target", opts.TargetAgentKey, "iterations", result.Iterations)
 
 	return &DelegateResult{Content: result.Content, Iterations: result.Iterations, DelegationID: task.ID}, nil
@@ -210,7 +224,9 @@ func (dm *DelegateManager) DelegateAsync(ctx context.Context, opts DelegateOpts)
 			dm.active.Delete(task.ID)
 		}()
 
+		startTime := time.Now()
 		result, runErr := dm.runAgent(taskCtx, opts.TargetAgentKey, runReq)
+		duration := time.Since(startTime)
 
 		// Announce result to parent via message bus
 		if dm.msgBus != nil && task.OriginChannel != "" {
@@ -236,12 +252,23 @@ func (dm *DelegateManager) DelegateAsync(ctx context.Context, opts DelegateOpts)
 		if runErr != nil {
 			task.Status = "failed"
 			dm.emitEvent("delegation.failed", task)
+			dm.saveDelegationHistory(task, "", runErr, duration)
 		} else {
-			task.Status = "completed"
-			dm.emitEvent("delegation.completed", task)
-			dm.trackCompleted(task)
-			if result != nil {
-				dm.autoCompleteTeamTask(task, result.Content)
+			// Apply quality gates before marking completed.
+			if result, runErr = dm.applyQualityGates(taskCtx, task, opts, result); runErr != nil {
+				task.Status = "failed"
+				dm.emitEvent("delegation.failed", task)
+				dm.saveDelegationHistory(task, "", runErr, duration)
+			} else {
+				task.Status = "completed"
+				dm.emitEvent("delegation.completed", task)
+				dm.trackCompleted(task)
+				resultContent := ""
+				if result != nil {
+					resultContent = result.Content
+					dm.autoCompleteTeamTask(task, resultContent)
+				}
+				dm.saveDelegationHistory(task, resultContent, nil, duration)
 			}
 		}
 		slog.Info("delegation finished (async)", "id", task.ID, "target", task.TargetAgentKey, "status", task.Status)
@@ -339,6 +366,17 @@ func (dm *DelegateManager) prepareDelegation(ctx context.Context, opts DelegateO
 		return nil, nil, err
 	}
 
+	// Enforce team_task_id for team members: every delegation must be tracked.
+	if dm.teamStore != nil && opts.TeamTaskID == uuid.Nil {
+		if team, _ := dm.teamStore.GetTeamForAgent(ctx, sourceAgentID); team != nil {
+			return nil, nil, fmt.Errorf(
+				"you are part of team %q — create a team task first: "+
+					"team_tasks action=create, subject=<title>. "+
+					"Then pass the returned task_id as team_task_id parameter",
+				team.Name)
+		}
+	}
+
 	linkCount := dm.ActiveCountForLink(sourceAgentID, targetAgent.ID)
 	if link.MaxConcurrent > 0 && linkCount >= link.MaxConcurrent {
 		return nil, nil, fmt.Errorf("delegation link to %q is at capacity (%d/%d active). Try again later or handle the task yourself",
@@ -375,7 +413,7 @@ func (dm *DelegateManager) prepareDelegation(ctx context.Context, opts DelegateO
 		OriginPeerKind:   peerKind,
 		OriginTraceID:    tracing.TraceIDFromContext(ctx),
 		OriginRootSpanID: tracing.ParentSpanIDFromContext(ctx),
-		TeamTaskID:       resolveTeamTaskID(opts),
+		TeamTaskID:       opts.TeamTaskID,
 	}
 
 	return task, link, nil
@@ -444,6 +482,115 @@ func parseMaxDelegationLoad(otherConfig json.RawMessage) int {
 	return cfg.MaxDelegationLoad
 }
 
+func parseQualityGates(otherConfig json.RawMessage) []hooks.HookConfig {
+	if len(otherConfig) == 0 {
+		return nil
+	}
+	var cfg struct {
+		QualityGates []hooks.HookConfig `json:"quality_gates"`
+	}
+	if json.Unmarshal(otherConfig, &cfg) != nil {
+		return nil
+	}
+	return cfg.QualityGates
+}
+
+// applyQualityGates evaluates quality gates on a delegation result.
+// Returns the (possibly revised) result. If a blocking gate fails after all retries,
+// returns the last result anyway with a logged warning (does not hard-fail the delegation).
+// Only returns error on catastrophic failures (e.g. context cancelled).
+func (dm *DelegateManager) applyQualityGates(
+	ctx context.Context, task *DelegationTask, opts DelegateOpts,
+	result *DelegateRunResult,
+) (*DelegateRunResult, error) {
+	if dm.hookEngine == nil || hooks.SkipHooksFromContext(ctx) {
+		return result, nil
+	}
+
+	sourceAgent, err := dm.agentStore.GetByID(ctx, task.SourceAgentID)
+	if err != nil || sourceAgent == nil {
+		return result, nil
+	}
+
+	gates := parseQualityGates(sourceAgent.OtherConfig)
+	if len(gates) == 0 {
+		return result, nil
+	}
+
+	hctx := hooks.HookContext{
+		Event:          "delegation.completed",
+		SourceAgentKey: task.SourceAgentKey,
+		TargetAgentKey: task.TargetAgentKey,
+		UserID:         task.UserID,
+		Content:        result.Content,
+		Task:           opts.Task,
+	}
+
+	for _, gate := range gates {
+		if gate.Event != "delegation.completed" {
+			continue
+		}
+
+		currentResult := result
+		retries := gate.MaxRetries
+
+		for attempt := 0; attempt <= retries; attempt++ {
+			hctx.Content = currentResult.Content
+
+			hookResult, evalErr := dm.hookEngine.EvaluateSingleHook(ctx, gate, hctx)
+			if evalErr != nil {
+				slog.Warn("quality_gate: evaluator error, skipping",
+					"type", gate.Type, "delegation", task.ID, "error", evalErr)
+				break
+			}
+
+			if hookResult.Passed {
+				result = currentResult
+				break
+			}
+
+			// Gate failed
+			if !gate.BlockOnFailure {
+				slog.Warn("quality_gate: non-blocking gate failed",
+					"type", gate.Type, "delegation", task.ID)
+				break
+			}
+
+			if attempt >= retries {
+				slog.Warn("quality_gate: max retries exceeded, accepting result",
+					"type", gate.Type, "delegation", task.ID, "retries", retries)
+				result = currentResult
+				break
+			}
+
+			// Retry: re-run target agent with feedback
+			slog.Info("quality_gate: retrying delegation",
+				"type", gate.Type, "delegation", task.ID,
+				"attempt", attempt+1, "max_retries", retries)
+
+			feedbackMsg := fmt.Sprintf(
+				"[Quality Gate Feedback — Retry %d/%d]\n"+
+					"Your previous output did not pass quality review.\n\n"+
+					"Feedback: %s\n\n"+
+					"Original task: %s\n\n"+
+					"Please revise your output addressing the feedback.",
+				attempt+1, retries, hookResult.Feedback, opts.Task)
+
+			rerunResult, rerunErr := dm.runAgent(ctx, opts.TargetAgentKey, dm.buildRunRequest(task, feedbackMsg))
+			if rerunErr != nil {
+				slog.Warn("quality_gate: retry run failed, accepting previous result",
+					"delegation", task.ID, "error", rerunErr)
+				result = currentResult
+				break
+			}
+			currentResult = rerunResult
+			result = currentResult
+		}
+	}
+
+	return result, nil
+}
+
 // trackCompleted records a delegate session key for deferred cleanup.
 func (dm *DelegateManager) trackCompleted(task *DelegationTask) {
 	if dm.sessionStore == nil {
@@ -493,18 +640,47 @@ func (dm *DelegateManager) autoCompleteTeamTask(task *DelegationTask, resultCont
 	}
 }
 
-// resolveTeamTaskID determines the team task ID from explicit opts or regex fallback.
-func resolveTeamTaskID(opts DelegateOpts) uuid.UUID {
-	if opts.TeamTaskID != uuid.Nil {
-		return opts.TeamTaskID
+
+// saveDelegationHistory persists a delegation record to the database.
+// Called after delegation completes (success, fail, or cancel). Errors are logged, not fatal.
+func (dm *DelegateManager) saveDelegationHistory(task *DelegationTask, resultContent string, delegateErr error, duration time.Duration) {
+	if dm.teamStore == nil {
+		return
 	}
-	// Regex fallback: extract from task message
-	if match := teamTaskIDRe.FindStringSubmatch(opts.Task); len(match) >= 2 {
-		if id, err := uuid.Parse(match[1]); err == nil {
-			return id
-		}
+
+	record := &store.DelegationHistoryData{
+		SourceAgentID: task.SourceAgentID,
+		TargetAgentID: task.TargetAgentID,
+		UserID:        task.UserID,
+		Task:          task.Task,
+		Mode:          task.Mode,
+		Iterations:    0,
+		DurationMS:    int(duration.Milliseconds()),
 	}
-	return uuid.Nil
+
+	if task.TeamTaskID != uuid.Nil {
+		record.TeamTaskID = &task.TeamTaskID
+	}
+	if task.OriginTraceID != uuid.Nil {
+		record.TraceID = &task.OriginTraceID
+	}
+
+	now := time.Now()
+	record.CompletedAt = &now
+
+	if delegateErr != nil {
+		record.Status = "failed"
+		errStr := delegateErr.Error()
+		record.Error = &errStr
+	} else {
+		record.Status = "completed"
+		record.Result = &resultContent
+	}
+
+	if err := dm.teamStore.SaveDelegationHistory(context.Background(), record); err != nil {
+		slog.Warn("delegate: failed to save delegation history",
+			"delegation_id", task.ID, "error", err)
+	}
 }
 
 func (dm *DelegateManager) emitEvent(name string, task *DelegationTask) {

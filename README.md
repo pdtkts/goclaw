@@ -4,63 +4,22 @@
 
 # GoClaw
 
-[![Go](https://img.shields.io/badge/Go_1.25-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL_15+-316192?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/) [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/) [![WebSocket](https://img.shields.io/badge/WebSocket-010101?style=flat-square&logo=socket.io&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) [![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-000000?style=flat-square&logo=opentelemetry&logoColor=white)](https://opentelemetry.io/) [![Anthropic](https://img.shields.io/badge/Anthropic-191919?style=flat-square&logo=anthropic&logoColor=white)](https://www.anthropic.com/) [![OpenAI](https://img.shields.io/badge/OpenAI_Compatible-412991?style=flat-square&logo=openai&logoColor=white)](https://openai.com/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
+[![Go](https://img.shields.io/badge/Go_1.25-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL_18-316192?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/) [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/) [![WebSocket](https://img.shields.io/badge/WebSocket-010101?style=flat-square&logo=socket.io&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) [![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-000000?style=flat-square&logo=opentelemetry&logoColor=white)](https://opentelemetry.io/) [![Anthropic](https://img.shields.io/badge/Anthropic-191919?style=flat-square&logo=anthropic&logoColor=white)](https://www.anthropic.com/) [![OpenAI](https://img.shields.io/badge/OpenAI_Compatible-412991?style=flat-square&logo=openai&logoColor=white)](https://openai.com/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
-> Multi-agent AI gateway with WebSocket RPC, HTTP API, and messaging channel integrations.
-> A Go port of [OpenClaw](https://github.com/openclaw/openclaw) with enhanced security, multi-tenant PostgreSQL, and production-grade observability.
+**GoClaw** is a multi-agent AI gateway that connects LLMs to your tools, channels, and data — deployed as a single Go binary with zero runtime dependencies. It orchestrates agent teams, inter-agent delegation, and quality-gated workflows across 11+ LLM providers with full multi-tenant isolation.
 
-## Why GoClaw?
+A Go port of [OpenClaw](https://github.com/openclaw/openclaw) with enhanced security, multi-tenant PostgreSQL, and production-grade observability.
 
-GoClaw is OpenClaw, reimagined in Go. It preserves the powerful gateway architecture while delivering a single compiled binary with no Node.js runtime, defense-in-depth security, and PostgreSQL-native multi-tenancy with per-user workspaces.
+## What Makes It Different
 
-## Key Improvements over OpenClaw
+- **Agent Teams & Orchestration** — Teams with shared task boards, inter-agent delegation (sync/async), conversation handoff, evaluate-loop quality gates, and hybrid agent discovery
+- **Multi-Tenant PostgreSQL** — Per-user workspaces, per-user context files, encrypted API keys (AES-256-GCM), isolated sessions — the only Claw project with DB-native multi-tenancy
+- **Single Binary** — ~25 MB static Go binary, no Node.js runtime, <1s startup, runs on a $5 VPS
+- **Production Security** — 5-layer defense: rate limiting, prompt injection detection, SSRF protection, shell deny patterns, AES-256-GCM encryption
+- **11+ LLM Providers** — Anthropic (native HTTP+SSE with prompt caching), OpenAI, OpenRouter, Groq, DeepSeek, Gemini, Mistral, xAI, MiniMax, Cohere, Perplexity
+- **5 Messaging Channels** — Telegram, Discord, Zalo, Feishu/Lark, WhatsApp with `/stop` and `/stopall` commands
 
-### Security Hardening
-
-- **Rate limiting** — Token bucket per user/IP via `golang.org/x/time/rate`, configurable RPM
-- **Prompt injection detection** — 6-pattern regex scanner (instruction override, role injection, system tags, etc.)
-- **Credential scrubbing** — Auto-redact API keys, tokens, and passwords from tool outputs
-- **Shell deny patterns** — Blocks `curl|sh`, reverse shells, `eval $()`, `base64|sh`
-- **SSRF protection** — DNS pinning, blocked private IPs, blocked hosts
-- **AES-256-GCM** — Encrypted API keys in database (managed mode)
-
-### Skill System
-
-- **BM25 full-text search** indexing for fast skill discovery
-- **Embedding-based search** — Hybrid BM25 + vector search via pgvector (managed mode)
-- **ZIP upload** with SKILL.md frontmatter validation and version tracking
-- **Fine-grained grants** — Agent-level and user-level access control
-
-### Parallel Execution
-
-- **Lane-based scheduler** — Main / subagent / delegate / cron lane isolation (env-configurable concurrency)
-- **Concurrent agent runs** — Multiple users in a group chat get parallel responses (configurable `maxConcurrent`, default 3 for groups). Adaptive throttle reduces concurrency when session history nears summarization threshold
-- **Session history isolation** — Concurrent runs buffer messages locally and flush atomically on completion, preventing cross-run context pollution
-- **Concurrent subagents** — Depth limits, count limits, model override
-- **Batched announce queue** — Debounced result delivery
-
-### Multi-User Managed Mode (PostgreSQL)
-
-Standalone mode shares everything across users (same as OpenClaw). Managed mode adds full per-user isolation:
-
-- **Per-user context files** — 7 files for open agents (AGENTS, SOUL, TOOLS, IDENTITY, USER, HEARTBEAT, BOOTSTRAP)
-- **Agent types** — `open` (per-user workspace) vs `predefined` (shared context + USER.md)
-- **User tracking** — first_seen_at, last_seen_at, workspace per user-agent pair
-- **Per-user overrides** — Provider and model overrides per user
-
-### Single Binary Distribution
-
-- No Node.js runtime required
-- `CGO_ENABLED=0` static binary (~25 MB base, ~36 MB with OTel)
-- Alpine Docker image (~50 MB)
-
-### Production Observability
-
-- **OpenTelemetry OTLP** export (gRPC/HTTP), opt-in via build tag
-- **Verbose tracing** — Full LLM input logging in trace spans (`GOCLAW_TRACE_VERBOSE=1`)
-- **Compile-out OTel** — Remove import to save ~11 MB binary size
-
-### Claw Ecosystem
+## Claw Ecosystem
 
 **Resource Footprint:**
 
@@ -80,10 +39,15 @@ Standalone mode shares everything across users (same as OpenClaw). Managed mode 
 | Multi-tenant (PostgreSQL)  | —                                    | —                                            | —                                     | ✅                             |
 | Custom tools (runtime API) | Config-based only                    | —                                            | —                                     | ✅                             |
 | MCP integration            | — (uses ACP)                         | —                                            | —                                     | ✅ (stdio/SSE/streamable-http) |
+| Agent teams                | —                                    | —                                            | —                                     | ✅ Task board + mailbox        |
+| Agent handoff              | —                                    | —                                            | —                                     | ✅ Conversation transfer       |
+| Evaluate loop              | —                                    | —                                            | —                                     | ✅ Generator-evaluator cycle   |
+| Quality gates              | —                                    | —                                            | —                                     | ✅ Hook-based validation       |
 | Security hardening         | ✅ (SSRF, path traversal, injection) | ✅ (sandbox, rate limit, injection, pairing) | Basic (workspace restrict, exec deny) | ✅ 5-layer defense             |
 | OTel observability         | ✅ (opt-in extension)                | ✅ (Prometheus + OTLP)                       | —                                     | ✅ OTLP (opt-in build tag)     |
+| Prompt caching             | —                                    | —                                            | —                                     | ✅ Anthropic + OpenAI-compat   |
 | Skill system               | ✅ Embeddings/semantic               | ✅ SKILL.md + TOML                           | ✅ Basic                              | ✅ BM25 + pgvector hybrid      |
-| Lane-based scheduler       | ✅                                   | Bounded concurrency                          | —                                     | ✅ (main/subagent/cron + concurrent group runs) |
+| Lane-based scheduler       | ✅                                   | Bounded concurrency                          | —                                     | ✅ (main/subagent/delegate/cron + concurrent group runs) |
 | Messaging channels         | 37+                                  | 15+                                          | 10+                                   | 5+                             |
 | Companion apps             | macOS, iOS, Android                  | Python SDK                                   | —                                     | Web dashboard                  |
 | Live Canvas / Voice        | ✅ (A2UI + TTS/STT)                  | —                                            | Voice transcription                   | TTS (4 providers)              |
@@ -91,28 +55,292 @@ Standalone mode shares everything across users (same as OpenClaw). Managed mode 
 | Per-user workspaces        | ✅ (file-based)                      | —                                            | —                                     | ✅ (managed mode only)         |
 | Encrypted secrets          | — (env vars only)                    | ✅ ChaCha20-Poly1305                         | — (plaintext JSON)                    | ✅ AES-256-GCM in DB           |
 
-> **GoClaw unique strengths:** Only project with multi-tenant PostgreSQL, runtime custom tools via API, and MCP protocol support. Only DB-backed secret encryption (vs ZeroClaw's file-based).
+> **GoClaw unique strengths:** Only project with multi-tenant PostgreSQL, agent teams, conversation handoff, evaluate-loop quality gates, runtime custom tools via API, and MCP protocol support.
+
+## Architecture
+
+```mermaid
+graph TB
+    subgraph Clients
+        WEB["Web Dashboard<br/>(React SPA)"]
+        TG["Telegram"]
+        DC["Discord"]
+        FS["Feishu/Lark"]
+        ZL["Zalo"]
+        API["HTTP API"]
+    end
+
+    subgraph Gateway["GoClaw Gateway"]
+        direction TB
+        WS["WebSocket RPC"] & REST["HTTP Server"] & CM["Channel Manager"]
+        WS & REST & CM --> BUS["Message Bus"]
+        BUS --> SCHED["Lane-based Scheduler<br/>main · subagent · delegate · cron"]
+        SCHED --> ROUTER["Agent Router"]
+        ROUTER --> LOOP["Agent Loop<br/>think → act → observe"]
+        LOOP --> TOOLS["Tool Registry<br/>fs · exec · web · memory · delegate · team · mcp · custom"]
+        LOOP --> LLM["LLM Providers<br/>Anthropic (native + prompt caching) · OpenAI-compat (10+)"]
+    end
+
+    subgraph Storage
+        FILE["File-based<br/>(standalone)"]
+        PG["PostgreSQL 18 + pgvector<br/>(managed · multi-tenant)"]
+    end
+
+    WEB --> WS
+    TG & DC & FS & ZL --> CM
+    API --> REST
+    LOOP --> FILE & PG
+```
+
+## Multi-Agent Orchestration
+
+GoClaw supports four orchestration patterns for agent collaboration, all managed through explicit permission links.
+
+### Agent Delegation
+
+Agent delegation enables named agents to delegate tasks to other agents — each running with its own identity, tools, LLM provider, and context files. Unlike subagents (anonymous clones of the parent), delegation targets are fully independent agents.
+
+```mermaid
+flowchart TD
+    USER((User)) -->|"Research competitor pricing"| SUPPORT
+
+    subgraph TEAM["Agent Team"]
+        SUPPORT["Support Bot<br/>(Claude Haiku)"]
+        RESEARCH["Research Bot<br/>(GPT-4)"]
+        WRITER["Content Writer<br/>(Claude Sonnet)"]
+        BILLING["Billing Bot<br/>(Gemini)"]
+    end
+
+    SUPPORT -->|"sync: wait for answer"| RESEARCH
+    RESEARCH -->|"result"| SUPPORT
+    SUPPORT -->|"async: don't wait"| WRITER
+    WRITER -.->|"announce when done"| SUPPORT
+    SUPPORT -.-x|"no link"| BILLING
+
+    SUPPORT -->|"final answer"| USER
+
+    style USER fill:#e1f5fe
+    style SUPPORT fill:#fff3e0
+    style RESEARCH fill:#e8f5e9
+    style WRITER fill:#f3e5f5
+    style BILLING fill:#ffebee
+```
+
+| Mode | How it works | Best for |
+|------|-------------|----------|
+| **Sync** | Agent A asks Agent B and **waits** for the answer | Quick lookups, fact checks |
+| **Async** | Agent A asks Agent B and **moves on**. B announces the result later | Long tasks, reports, deep analysis |
+
+**Permission Links** — Agents communicate through explicit **agent links** with access control:
+
+```bash
+# One-way: support-bot can delegate TO research-bot
+agents.links.create {
+  "sourceAgent": "support-bot",
+  "targetAgent": "research-bot",
+  "direction": "outbound",
+  "maxConcurrent": 3
+}
+
+# Bidirectional: both agents can delegate to each other
+agents.links.create {
+  "sourceAgent": "support-bot",
+  "targetAgent": "content-writer",
+  "direction": "bidirectional"
+}
+```
+
+| Direction | Meaning |
+|-----------|---------|
+| `outbound` | Source can delegate TO target |
+| `inbound` | Target can delegate TO source |
+| `bidirectional` | Both agents can delegate to each other |
+
+**Concurrency Control** — Two layers prevent any agent from being overwhelmed:
+
+| Layer | Config | Example |
+|-------|--------|---------|
+| **Per-link** | `agent_links.max_concurrent` | support → research: max 3 |
+| **Per-agent** | `agents.other_config.max_delegation_load` | research-bot: max 5 total |
+
+**Per-User Restrictions** — The `settings` JSONB on agent links supports per-user deny/allow lists.
+
+**Agent Discovery** — Each agent has a `frontmatter` field for discovery. With ≤15 targets, auto-generated `AGENTS.md` is injected into context. With >15 targets, agents use `delegate_search` for hybrid FTS + semantic search.
+
+<details>
+<summary>Delegation vs Subagents</summary>
+
+| Aspect | Subagents | Agent Delegation |
+|--------|-----------|-----------------|
+| Target | Anonymous clone of parent | Named agent with own identity |
+| Provider/Model | Inherited from parent | Target's own configuration |
+| Tools | Parent's tools minus deny list | Target's own tool registry + policy |
+| Context files | Simplified system prompt | Target's own SOUL.md, IDENTITY.md, etc. |
+| Session | Shared with parent | Isolated (fresh per delegation) |
+| Permission | Depth-based limits only | Explicit `agent_links` with direction |
+| User control | None | Per-user deny/allow via settings JSONB |
+| Concurrency | Global + per-parent limits | Per-link + per-target-agent limits |
+
+</details>
+
+### Agent Teams
+
+Teams enable coordinated multi-agent workflows with a shared task board and peer-to-peer messaging.
+
+```mermaid
+flowchart TD
+    USER((User)) -->|message| LEAD
+
+    subgraph TEAM["Agent Team"]
+        LEAD["Lead Agent<br/>(orchestrator)"]
+        A1["Specialist A"]
+        A2["Specialist B"]
+        A3["Specialist C"]
+    end
+
+    subgraph BOARD["Shared Task Board"]
+        T1["Task 1: pending"]
+        T2["Task 2: in_progress<br/>owner: A1"]
+        T3["Task 3: blocked_by T2"]
+    end
+
+    subgraph MAIL["Team Mailbox"]
+        M1["A1 → LEAD: status update"]
+        M2["LEAD → ALL: broadcast"]
+    end
+
+    LEAD -->|"create tasks"| BOARD
+    A1 -->|"claim"| T2
+    T2 -.->|"auto-unblocks"| T3
+    A1 -->|"send message"| MAIL
+    LEAD -->|"broadcast"| MAIL
+    LEAD -->|final answer| USER
+
+    style USER fill:#e1f5fe
+    style LEAD fill:#fff3e0
+    style A1 fill:#e8f5e9
+    style A2 fill:#e8f5e9
+    style A3 fill:#e8f5e9
+```
+
+- **Team roles** — Lead agent orchestrates work, member agents execute tasks
+- **Shared task board** — Create, claim, complete, search tasks with `blocked_by` dependencies. Atomic claiming prevents double-assignment
+- **Team mailbox** — Direct peer-to-peer messaging (send, broadcast, read unread)
+- **Tools**: `team_tasks` for task management, `team_message` for mailbox
+
+### Agent Handoff
+
+Handoff transfers conversation control from one agent to another. Unlike delegation (where A stays in control), handoff means B completely takes over the user conversation.
+
+```mermaid
+flowchart LR
+    subgraph Delegation["Delegation (A stays in control)"]
+        direction TB
+        DA["Agent A"] -->|"delegate task"| DB["Agent B"]
+        DB -->|"return result"| DA
+        DA -->|"reply to user"| DU((User))
+    end
+
+    subgraph Handoff["Handoff (B takes over)"]
+        direction TB
+        HA["Agent A"] -->|"handoff"| HB["Agent B"]
+        HB -->|"now handles user"| HU((User))
+    end
+```
+
+- **Routing override** — Sets a routing rule so all future messages go to the target agent
+- **Context transfer** — Conversation context is passed to the new agent
+- **Revert** — `handoff(action="clear")` returns routing to the original agent
+
+### Evaluate Loop
+
+The evaluate loop orchestrates a generator-evaluator feedback cycle between two agents for quality-gated output.
+
+```mermaid
+flowchart LR
+    TASK["Task + Criteria"] --> GEN["Generator<br/>Agent"]
+    GEN -->|"output"| EVAL{"Evaluator<br/>Agent"}
+    EVAL -->|"APPROVED"| RESULT["Final Output"]
+    EVAL -->|"REJECTED + feedback"| GEN
+    EVAL -.->|"max rounds hit"| WARN["Last output + warning"]
+```
+
+- **Configurable rounds** — Default 3, max 5 revision cycles
+- **Custom pass criteria** — Define what "approved" means for the evaluator
+- **Tool**: `evaluate_loop(generator="writer-bot", evaluator="qa-bot", task="...", pass_criteria="...")`
+
+### Quality Gates
+
+Quality gates validate agent output before it reaches users. Configured in agent `other_config`:
+
+```json
+{
+  "quality_gates": [
+    {
+      "event": "delegation.completed",
+      "type": "agent",
+      "agent": "qa-reviewer",
+      "block_on_failure": true,
+      "max_retries": 2
+    }
+  ]
+}
+```
+
+- **Hook types**: `command` (shell exit code: 0 = pass) or `agent` (delegate to reviewer agent)
+- **Blocking** — Failed gates can block output and trigger automatic retry with feedback
+- **Recursion-safe** — Quality gate evaluators skip their own gates to prevent infinite loops
 
 ## Features
 
-- **Multi-provider LLM support** — OpenRouter, Anthropic, OpenAI, Groq, DeepSeek, Gemini, Mistral, xAI, MiniMax, Cohere, Perplexity, and any OpenAI-compatible endpoint
+### LLM Providers
+- **11+ providers** — OpenRouter, Anthropic, OpenAI, Groq, DeepSeek, Gemini, Mistral, xAI, MiniMax, Cohere, Perplexity, and any OpenAI-compatible endpoint
+- **Anthropic native** — Direct HTTP+SSE integration with prompt caching (`cache_control`) for ~90% cost reduction on repeated prefixes
+- **OpenAI-compatible** — Automatic prompt caching for OpenAI, MiniMax, OpenRouter (cache metrics tracked in traces)
+
+### Agent Orchestration
 - **Agent loop** — Think-act-observe cycle with tool use, session history, and auto-summarization
 - **Subagents** — Spawn child agents with different models for parallel task execution
-- **Agent delegation** — Delegate tasks between named agents with permission-controlled links, sync/async modes, concurrency limits, per-user restrictions, and hybrid FTS + semantic agent discovery (managed mode)
-- **Messaging channels** — Telegram, Discord, Zalo, Feishu/Lark, WhatsApp. `/stop` cancels the current task, `/stopall` cancels all running tasks in a chat
-- **Memory system** — Long-term memory with SQLite FTS5 + vector embeddings (standalone) or pgvector hybrid search (managed)
+- **Agent delegation** — Sync/async inter-agent task delegation with permission links, concurrency limits, and per-user restrictions
+- **Agent teams** — Shared task boards with dependencies, team mailbox, and coordinated multi-agent workflows
+- **Agent handoff** — Transfer conversation control between agents with routing overrides
+- **Evaluate loop** — Generator-evaluator feedback cycles for quality-gated output
+- **Quality gates** — Hook-based output validation with command or agent evaluators
+- **Delegation history** — Queryable audit trail of all inter-agent delegations
+- **Concurrent execution** — Lane-based scheduler (main/subagent/delegate/cron), adaptive throttle for group chats
+
+### Tools & Integrations
+- **30+ built-in tools** — File system, shell exec, web search/fetch, memory, browser automation, TTS, and more
+- **Custom tools** — Define shell-based tools at runtime via HTTP API with JSON Schema parameters and encrypted env vars
+- **MCP integration** — Connect external MCP servers via stdio, SSE, or streamable-http with per-agent/per-user grants
+
+### Messaging Channels
+- **Telegram** — Full integration with streaming, rich formatting (HTML, tables, code blocks), reactions, media
+- **Discord, Zalo, Feishu/Lark, WhatsApp** — Channel adapters with `/stop` and `/stopall` commands
+
+### Knowledge & Memory
 - **Skills** — SKILL.md-based knowledge base with BM25 search + embedding hybrid search (managed mode)
-- **Custom tools** — Define shell-based tools at runtime via HTTP API with JSON Schema parameters, auto shell-escaping, and encrypted environment variables (managed mode)
-- **MCP integration** — Connect external MCP servers via stdio, SSE, or streamable-http transports with per-agent/per-user grants and tool name prefixing
+- **Long-term memory** — SQLite FTS5 + vector embeddings (standalone) or pgvector hybrid search (managed)
+
+### Infrastructure
 - **Cron scheduling** — `at`, `every`, and cron expression syntax for scheduled agent tasks
 - **Browser automation** — Headless Chrome via Rod for web interaction
 - **Text-to-Speech** — OpenAI, ElevenLabs, Edge, MiniMax providers
 - **Docker sandbox** — Isolated code execution in containers
-- **Tracing** — LLM call tracing with optional OpenTelemetry OTLP export
-- **Security hardening** — Rate limiting, input guard, CORS, shell deny patterns, SSRF protection, path traversal prevention
-- **Browser pairing** — Token-free browser authentication with admin-approved pairing codes
-- **Tailscale integration** — Optional secure remote access via Tailscale VPN mesh (build-tag gated, no binary bloat in default build)
-- **Web dashboard** — React admin UI for agents, traces, and skills
+- **Tracing** — LLM call tracing with cache metrics, span metadata, and optional OpenTelemetry OTLP export
+- **Tailscale** — Optional VPN mesh listener for secure remote access (build-tag gated)
+
+### Security
+- **Rate limiting** — Token bucket per user/IP, configurable RPM
+- **Prompt injection detection** — 6-pattern regex scanner (detection-only, never blocks)
+- **Credential scrubbing** — Auto-redact API keys, tokens, passwords from tool outputs
+- **Shell deny patterns** — Blocks `curl|sh`, reverse shells, `eval $()`, `base64|sh`
+- **SSRF protection** — DNS pinning, blocked private IPs, blocked hosts
+- **AES-256-GCM** — Encrypted API keys in database (managed mode)
+- **Browser pairing** — Token-free browser auth with admin-approved pairing codes
+
+### Web Dashboard
+- Agent management, traces & spans viewer, skills, teams, MCP servers, and pairing approval
 
 ## Quick Start
 
@@ -131,29 +359,118 @@ source .env.local && ./goclaw
 
 ### With Docker
 
+When `GOCLAW_*_API_KEY` environment variables are set, the gateway **auto-onboards** without interactive prompts — it detects the provider, generates a gateway token, and (in managed mode) connects to Postgres, runs migrations, and seeds default data.
+
+**Standalone mode** — requires only a provider API key:
+
 ```bash
-# Create .env with your API key
-echo "GOCLAW_OPENROUTER_API_KEY=sk-or-your-key" > .env
+# .env
+GOCLAW_OPENROUTER_API_KEY=sk-or-your-key    # Required: at least one provider key
+GOCLAW_GATEWAY_TOKEN=your-token              # Optional (auto-generated if not set)
+```
 
-# Standalone mode (file-based storage)
+```bash
 docker compose -f docker-compose.yml -f docker-compose.standalone.yml up
+```
 
+**Managed mode** — additionally needs Postgres credentials:
+
+```bash
+# .env
+GOCLAW_OPENROUTER_API_KEY=sk-or-your-key    # Required: at least one provider key
+GOCLAW_GATEWAY_TOKEN=your-token              # Optional (auto-generated)
+GOCLAW_ENCRYPTION_KEY=hex-64-chars           # Optional (auto-generated)
+GOCLAW_OWNER_IDS=admin                       # Optional: admin user IDs (can manage all agents)
+POSTGRES_USER=goclaw                         # Postgres container credentials
+POSTGRES_PASSWORD=your-secure-password
+POSTGRES_DB=goclaw
+```
+
+```bash
 # Managed mode (PostgreSQL)
 docker compose -f docker-compose.yml -f docker-compose.managed.yml up
 
-# Managed mode + OpenTelemetry tracing
+# + Web Dashboard (http://localhost:3000)
+docker compose -f docker-compose.yml -f docker-compose.managed.yml -f docker-compose.selfservice.yml up
+
+# + OpenTelemetry tracing (Jaeger at http://localhost:16686)
 docker compose -f docker-compose.yml -f docker-compose.managed.yml -f docker-compose.otel.yml up
 
-# Managed mode + Tailscale (secure remote access)
+# + Tailscale (secure remote access)
 docker compose -f docker-compose.yml -f docker-compose.managed.yml -f docker-compose.tailscale.yml up
 ```
+
+**Auto-onboard detects** the first available API key in priority order: OpenRouter → Anthropic → OpenAI → Groq → DeepSeek → Gemini → Mistral → xAI → MiniMax → Cohere → Perplexity. Override with `GOCLAW_PROVIDER` and `GOCLAW_MODEL`. Memory is auto-enabled with embedding support if an OpenAI, OpenRouter, or Gemini key is detected.
+
+## Deployment Modes
+
+> **Recommendation:** Use **managed mode** for the best experience. Most of GoClaw's advanced features — agent teams, delegation, handoff, evaluate loops, quality gates, tracing, skills with embedding search, MCP integration, and the web dashboard — require managed mode. Standalone mode is suitable for quick evaluation or single-user setups only.
+
+| Capability | Standalone | Managed |
+|-----------|:----------:|:-------:|
+| Basic agent loop + tools | ✅ | ✅ |
+| Messaging channels | ✅ | ✅ |
+| Memory (FTS) | ✅ | ✅ |
+| Per-user isolation | — | ✅ |
+| Agent teams & delegation | — | ✅ |
+| Handoff & evaluate loops | — | ✅ |
+| Quality gates | — | ✅ |
+| Tracing with cache metrics | — | ✅ |
+| Skills (BM25 + pgvector) | Basic | ✅ Hybrid search |
+| MCP server integration | — | ✅ |
+| Custom tools (runtime API) | — | ✅ |
+| Web dashboard | — | ✅ |
+| API key encryption | — | ✅ AES-256-GCM |
+
+### Standalone
+
+File-based storage, no external database required. All users share the same workspace, sessions, and context files — no per-user isolation. Best suited for quick evaluation or single-user setups.
+
+```
+config.json          -> Non-secret settings
+.env.local           -> Secrets (API keys, tokens)
+~/.goclaw/
+  |-- workspace/     -> Shared agent workspace (SOUL.md, AGENTS.md, etc.)
+  |-- data/          -> Cron jobs, pairing data
+  |-- sessions/      -> Chat session history (shared across users)
+  +-- skills/        -> User-managed skills
+```
+
+### Managed (PostgreSQL) — Recommended
+
+All data in PostgreSQL with pgvector support. Designed for multi-user and multi-tenant deployments with **per-user isolation** — each user gets their own context files, session history, and workspace. Unlocks all advanced features.
+
+```bash
+# Set up database
+export GOCLAW_MODE=managed
+export GOCLAW_POSTGRES_DSN="postgres://user:pass@localhost:5432/goclaw?sslmode=disable"
+export GOCLAW_ENCRYPTION_KEY=$(openssl rand -hex 32)
+
+# Run migrations
+./goclaw migrate up
+
+# Start gateway
+./goclaw
+```
+
+**Managed mode adds:**
+
+- Per-user context files and workspaces (`user_context_files` table)
+- Agent types: `open` (per-user workspace) vs `predefined` (shared context)
+- Agent teams, delegation, handoff, evaluate loops, quality gates
+- LLM call tracing with spans and prompt cache metrics
+- MCP server integration with per-agent and per-user access grants
+- Custom tools with JSON Schema and encrypted env vars
+- Embedding-based skill search (hybrid BM25 + pgvector)
+- Web dashboard for agents, traces, skills, teams, and MCP servers
+- API key encryption (AES-256-GCM)
 
 ## Installation
 
 ### Prerequisites
 
 - Go 1.25+
-- PostgreSQL 15+ with pgvector (managed mode only)
+- PostgreSQL 18 with pgvector (managed mode only)
 - Docker (optional, for sandbox and containerized deployment)
 
 ### Build
@@ -218,7 +535,8 @@ When `GOCLAW_*_API_KEY` environment variables are set, the gateway automatically
 
 ### Environment Variables
 
-**Provider API Keys** (set at least one):
+<details>
+<summary><strong>Provider API Keys</strong> (set at least one)</summary>
 
 | Variable                    | Provider                 |
 | --------------------------- | ------------------------ |
@@ -234,7 +552,10 @@ When `GOCLAW_*_API_KEY` environment variables are set, the gateway automatically
 | `GOCLAW_COHERE_API_KEY`     | Cohere                   |
 | `GOCLAW_PERPLEXITY_API_KEY` | Perplexity               |
 
-**Gateway & Application:**
+</details>
+
+<details>
+<summary><strong>Gateway & Application</strong></summary>
 
 | Variable                  | Description                      | Default                      |
 | ------------------------- | -------------------------------- | ---------------------------- |
@@ -248,9 +569,12 @@ When `GOCLAW_*_API_KEY` environment variables are set, the gateway automatically
 | `GOCLAW_DATA_DIR`         | Data storage directory           | `~/.goclaw/data`             |
 | `GOCLAW_SESSIONS_STORAGE` | Sessions storage path            | `~/.goclaw/sessions`         |
 | `GOCLAW_SKILLS_DIR`       | Skills directory                 | `~/.goclaw/skills`           |
-| `GOCLAW_OWNER_IDS`        | Owner user IDs (comma-separated) |                              |
+| `GOCLAW_OWNER_IDS`        | Admin user IDs (comma-separated) — owners can manage **all** agents regardless of ownership and are used as default owner for auto-seeded resources |                              |
 
-**Database (Managed Mode):**
+</details>
+
+<details>
+<summary><strong>Database (Managed Mode)</strong></summary>
 
 | Variable                | Description                            |
 | ----------------------- | -------------------------------------- |
@@ -259,7 +583,10 @@ When `GOCLAW_*_API_KEY` environment variables are set, the gateway automatically
 | `GOCLAW_ENCRYPTION_KEY` | AES-256-GCM key for API key encryption |
 | `GOCLAW_MIGRATIONS_DIR` | Path to migration files                |
 
-**Messaging Channels:**
+</details>
+
+<details>
+<summary><strong>Messaging Channels</strong></summary>
 
 | Variable                           | Description                   |
 | ---------------------------------- | ----------------------------- |
@@ -270,7 +597,10 @@ When `GOCLAW_*_API_KEY` environment variables are set, the gateway automatically
 | `GOCLAW_FEISHU_ENCRYPT_KEY`        | Feishu message encryption key |
 | `GOCLAW_FEISHU_VERIFICATION_TOKEN` | Feishu verification token     |
 
-**Scheduler Lanes:**
+</details>
+
+<details>
+<summary><strong>Scheduler Lanes</strong></summary>
 
 | Variable               | Description                  | Default |
 | ---------------------- | ---------------------------- | ------- |
@@ -279,7 +609,10 @@ When `GOCLAW_*_API_KEY` environment variables are set, the gateway automatically
 | `GOCLAW_LANE_DELEGATE` | Delegation lane concurrency  | `100`   |
 | `GOCLAW_LANE_CRON`     | Cron lane concurrency        | `30`    |
 
-**Tailscale (requires build tag `tsnet`):**
+</details>
+
+<details>
+<summary><strong>Tailscale</strong> (requires build tag <code>tsnet</code>)</summary>
 
 | Variable                | Description                                   | Default    |
 | ----------------------- | --------------------------------------------- | ---------- |
@@ -287,7 +620,10 @@ When `GOCLAW_*_API_KEY` environment variables are set, the gateway automatically
 | `GOCLAW_TSNET_AUTH_KEY` | Tailscale auth key                            |            |
 | `GOCLAW_TSNET_DIR`      | Persistent state directory                    | OS default |
 
-**Telemetry (requires build tag `otel`):**
+</details>
+
+<details>
+<summary><strong>Telemetry</strong> (requires build tag <code>otel</code>)</summary>
 
 | Variable                        | Description                 | Default          |
 | ------------------------------- | --------------------------- | ---------------- |
@@ -298,7 +634,10 @@ When `GOCLAW_*_API_KEY` environment variables are set, the gateway automatically
 | `GOCLAW_TELEMETRY_SERVICE_NAME` | Service name in traces      | `goclaw-gateway` |
 | `GOCLAW_TRACE_VERBOSE`          | Log full LLM input in spans | `0`              |
 
-**TTS (Text-to-Speech):**
+</details>
+
+<details>
+<summary><strong>TTS (Text-to-Speech)</strong></summary>
 
 | Variable                        | Description         |
 | ------------------------------- | ------------------- |
@@ -307,49 +646,7 @@ When `GOCLAW_*_API_KEY` environment variables are set, the gateway automatically
 | `GOCLAW_TTS_MINIMAX_API_KEY`    | MiniMax TTS API key |
 | `GOCLAW_TTS_MINIMAX_GROUP_ID`   | MiniMax group ID    |
 
-## Deployment Modes
-
-### Standalone (Default)
-
-File-based storage, no external database required. Behaves like the original OpenClaw — all users share the same workspace, sessions, and context files. There is no per-user isolation; every user sees and modifies the same agent state. Best suited for single-user or trusted-team setups.
-
-```
-config.json          -> Non-secret settings
-.env.local           -> Secrets (API keys, tokens)
-~/.goclaw/
-  |-- workspace/     -> Shared agent workspace (SOUL.md, AGENTS.md, etc.)
-  |-- data/          -> Cron jobs, pairing data
-  |-- sessions/      -> Chat session history (shared across users)
-  +-- skills/        -> User-managed skills
-```
-
-### Managed (PostgreSQL)
-
-All data in PostgreSQL with pgvector support. Designed for multi-user and multi-tenant deployments with **per-user isolation** — each user gets their own context files, session history, and workspace. This is the key difference from standalone mode (and OpenClaw).
-
-```bash
-# Set up database
-export GOCLAW_MODE=managed
-export GOCLAW_POSTGRES_DSN="postgres://user:pass@localhost:5432/goclaw?sslmode=disable"
-export GOCLAW_ENCRYPTION_KEY=$(openssl rand -hex 32)
-
-# Run migrations
-./goclaw migrate up
-
-# Start gateway
-./goclaw
-```
-
-**Managed mode features:**
-
-- Agent definitions stored in `agents` table
-- Per-user context files (`user_context_files` table)
-- Agent types: `open` (per-user workspace) vs `predefined` (shared context)
-- API key encryption (AES-256-GCM)
-- LLM call tracing with spans
-- MCP server integration with per-agent and per-user access grants
-- Embedding-based skill search (hybrid BM25 + pgvector)
-- HTTP API for agents, skills, traces, and MCP servers
+</details>
 
 ## CLI Commands
 
@@ -409,7 +706,7 @@ See [WebSocket Protocol](websocket-protocol.md) for the real-time RPC protocol (
 
 ## Docker Compose
 
-Six composable files for different deployment scenarios:
+Seven composable files for different deployment scenarios:
 
 | File                             | Purpose                                            |
 | -------------------------------- | -------------------------------------------------- |
@@ -417,6 +714,7 @@ Six composable files for different deployment scenarios:
 | `docker-compose.standalone.yml`  | File-based storage with persistent volumes         |
 | `docker-compose.managed.yml`     | PostgreSQL (pgvector/pgvector:pg18) + managed mode |
 | `docker-compose.selfservice.yml` | Web dashboard UI (nginx + React SPA)               |
+| `docker-compose.sandbox.yml`     | Docker-based code execution sandbox                |
 | `docker-compose.otel.yml`        | OpenTelemetry + Jaeger tracing                     |
 | `docker-compose.tailscale.yml`   | Tailscale VPN mesh listener                        |
 
@@ -466,261 +764,43 @@ POSTGRES_PASSWORD=your-secure-password
 POSTGRES_DB=goclaw
 ```
 
-## Architecture
-
-```
-+-----------------------------------------------------------+
-|                     Gateway Server                         |
-|  +----------+  +----------+  +------------------------+   |
-|  | WebSocket|  |  HTTP API |  |    Channel Manager     |   |
-|  |  /ws     |  | /v1/chat  |  | Telegram|Discord|Feishu|   |
-|  +----+-----+  +----+-----+  +--------+---------------+   |
-|       |              |                 |                    |
-|       +--------------+-----------------+                    |
-|                      v                                      |
-|              +---------------+                              |
-|              |  Message Bus  |                              |
-|              +-------+-------+                              |
-|                      v                                      |
-|              +---------------+                              |
-|              |   Scheduler   |  (lane-based concurrency)    |
-|              +-------+-------+                              |
-|                      v                                      |
-|  +-----------------------------------------------------+   |
-|  |                 Agent Router                         |   |
-|  |  +---------+  +---------+  +-----------------+      |   |
-|  |  | default |  | agent-2 |  |  subagent (lazy) |     |   |
-|  |  +----+----+  +----+----+  +--------+--------+     |   |
-|  |       +-------------+---------------+               |   |
-|  |                     v                               |   |
-|  |           +------------------+                      |   |
-|  |           |    Agent Loop    |                      |   |
-|  |           | think->act->observe|                    |   |
-|  |           +--------+---------+                      |   |
-|  +--------------------+-------------------------------+   |
-|                       v                                     |
-|  +-----------------------------------------------------+  |
-|  |              Tool Registry                           |  |
-|  | read_file|write_file|exec|web_search|web_fetch|...   |  |
-|  | memory|skill_search|tts|spawn|browser|delegate|...   |  |
-|  | custom tools (runtime) | MCP bridge (stdio/SSE/HTTP) |  |
-|  +-----------------------------------------------------+  |
-|                       v                                     |
-|  +-----------------------------------------------------+  |
-|  |            LLM Provider Registry                     |  |
-|  | Anthropic (native HTTP+SSE) | OpenAI-compat (HTTP/SSE) |  |
-|  +-----------------------------------------------------+  |
-|                       v                                     |
-|  +-----------------------------------------------------+  |
-|  |                 Store Layer                          |  |
-|  |   Standalone: file-based  |  Managed: PostgreSQL     |  |
-|  +-----------------------------------------------------+  |
-+-----------------------------------------------------------+
-```
-
 ## Built-in Tools
 
-| Tool               | Group      | Description                                                  |
-| ------------------ | ---------- | ------------------------------------------------------------ |
-| `read_file`        | fs         | Read file contents (with virtual FS routing in managed mode) |
-| `write_file`       | fs         | Write/create files                                           |
-| `edit_file`        | fs         | Apply targeted edits to existing files                       |
-| `list_files`       | fs         | List directory contents                                      |
-| `search`           | fs         | Search file contents by pattern                              |
-| `glob`             | fs         | Find files by glob pattern                                   |
-| `exec`             | runtime    | Execute shell commands (with approval workflow)              |
-| `process`          | runtime    | Manage running processes                                     |
-| `web_search`       | web        | Search the web (Brave, DuckDuckGo)                           |
-| `web_fetch`        | web        | Fetch and parse web content                                  |
-| `memory_search`    | memory     | Search long-term memory (FTS + vector)                       |
-| `memory_get`       | memory     | Retrieve memory entries                                      |
-| `skill_search`     | —          | Search skills (BM25 + embedding hybrid in managed mode)      |
-| `image`            | —          | Image generation/manipulation                                |
-| `message`          | messaging  | Send messages to channels                                    |
-| `tts`              | —          | Text-to-Speech synthesis                                     |
-| `spawn`            | —          | Spawn a subagent                                             |
-| `subagents`        | sessions   | Control running subagents                                    |
-| `delegate`         | —          | Delegate tasks to other agents (sync/async, cancel, list)    |
-| `delegate_search`  | —          | Search delegation targets (hybrid FTS + semantic)            |
-| `sessions_list`    | sessions   | List active sessions                                         |
-| `sessions_history` | sessions   | View session history                                         |
-| `sessions_send`    | sessions   | Send message to a session                                    |
-| `sessions_spawn`   | sessions   | Spawn a new session                                          |
-| `session_status`   | sessions   | Check session status                                         |
-| `cron`             | automation | Schedule and manage cron jobs                                |
-| `gateway`          | automation | Gateway administration                                       |
-| `browser`          | ui         | Browser automation (navigate, click, type, screenshot)       |
-| `canvas`           | ui         | Visual canvas for diagrams                                   |
-
-## Agent Delegation (Managed Mode)
-
-Agent delegation enables named agents to delegate tasks to other agents — each running with its own identity, tools, LLM provider, and context files. Unlike subagents (anonymous clones of the parent), delegation targets are fully independent agents with their own expertise.
-
-### How Agents Collaborate
-
-```mermaid
-flowchart TD
-    USER((👤 User)) -->|"Research competitor pricing"| SUPPORT
-
-    subgraph TEAM["🤖 Agent Team"]
-        SUPPORT["💬 Support Bot\n(Claude Haiku)"]
-        RESEARCH["🔍 Research Bot\n(GPT-4)"]
-        WRITER["✍️ Content Writer\n(Claude Sonnet)"]
-        BILLING["💳 Billing Bot\n(Gemini)"]
-    end
-
-    SUPPORT -->|"🔄 sync: wait for answer"| RESEARCH
-    RESEARCH -->|"📋 result"| SUPPORT
-    SUPPORT -->|"⚡ async: don't wait"| WRITER
-    WRITER -.->|"📣 announce when done"| SUPPORT
-    SUPPORT -.-x|"🚫 no link"| BILLING
-
-    SUPPORT -->|"✅ final answer"| USER
-
-    style USER fill:#e1f5fe
-    style SUPPORT fill:#fff3e0
-    style RESEARCH fill:#e8f5e9
-    style WRITER fill:#f3e5f5
-    style BILLING fill:#ffebee
-```
-
-| Mode | How it works | Best for |
-|------|-------------|----------|
-| **Sync** | Agent A asks Agent B and **waits** for the answer | Quick lookups, fact checks |
-| **Async** | Agent A asks Agent B and **moves on**. B announces the result later | Long tasks, reports, deep analysis |
-
-### Architecture
-
-```mermaid
-flowchart TD
-    U[User] -->|chat| A[Agent A<br/>Customer Support<br/>Claude Haiku]
-
-    subgraph Delegation["Inter-Agent Delegation"]
-        A -->|"delegate(sync)"| B[Agent B<br/>Research Bot<br/>GPT-4]
-        A -->|"delegate(async)"| C[Agent C<br/>Content Writer<br/>Claude Sonnet]
-        B -->|result| A
-        C -->|announce via Message Bus| A
-    end
-
-    subgraph Permission["Permission Layer"]
-        LINKS[(agent_links<br/>direction · max_concurrent<br/>settings JSONB)]
-        LINKS -->|outbound| B
-        LINKS -->|bidirectional| C
-    end
-
-    subgraph Search["Agent Discovery"]
-        FTS[FTS<br/>tsvector on agents]
-        VEC[Semantic<br/>pgvector embeddings]
-        FTS & VEC -->|hybrid 0.3 + 0.7| RESULTS[delegate_search tool]
-    end
-
-    A -.->|"≤15 targets"| AGENTSMD["AGENTS.md<br/>(auto-injected)"]
-    A -.->|">15 targets"| RESULTS
-```
-
-### Permission Links
-
-Agents communicate through explicit **agent links** — directed edges with access control:
-
-```bash
-# Create a one-way link: support-bot can delegate TO research-bot
-agents.links.create {
-  "sourceAgent": "support-bot",
-  "targetAgent": "research-bot",
-  "direction": "outbound",
-  "description": "Allow support to request research",
-  "maxConcurrent": 3
-}
-
-# Bidirectional: both agents can delegate to each other
-agents.links.create {
-  "sourceAgent": "support-bot",
-  "targetAgent": "content-writer",
-  "direction": "bidirectional"
-}
-```
-
-| Direction | Meaning |
-|-----------|---------|
-| `outbound` | Source can delegate TO target |
-| `inbound` | Target can delegate TO source |
-| `bidirectional` | Both agents can delegate to each other |
-
-### Delegation Modes
-
-**Sync** (default) — Agent A blocks while B processes:
-
-```
-delegate(agent="research-bot", task="Find competitor pricing for X")
-→ research-bot runs full agent loop (own tools, identity, provider)
-→ result returned inline to agent A
-```
-
-**Async** — Agent A continues immediately, result announced later:
-
-```
-delegate(agent="research-bot", task="Deep market analysis", mode="async")
-→ returns immediately with delegation ID
-→ research-bot runs in background via "delegate" scheduler lane
-→ result announced back through message bus → A reformulates for user
-```
-
-**Cancel & List:**
-
-```
-delegate(action="cancel", delegation_id="abc123")
-delegate(action="list")
-```
-
-### Concurrency Control
-
-Two layers prevent any agent from being overwhelmed:
-
-| Layer | Config | Example |
-|-------|--------|---------|
-| **Per-link** | `agent_links.max_concurrent` | support → research: max 3 |
-| **Per-agent** | `agents.other_config.max_delegation_load` | research-bot: max 5 total |
-
-When limits are hit, the delegate tool returns a descriptive error so the LLM can adapt (retry later, use a different agent, or handle the task itself).
-
-### Per-User Restrictions
-
-The `settings` JSONB on agent links supports per-user access control:
-
-```json
-{
-  "user_deny": ["free-tier-user"],
-  "user_allow": ["premium-user-1", "premium-user-2"]
-}
-```
-
-Empty settings = all users allowed (default). Deny list is checked first, then allow list.
-
-### Agent Discovery
-
-Each agent has a `frontmatter` field — a short expertise summary used for discovery:
-
-- **≤15 delegation targets**: Auto-generated `AGENTS.md` is injected into the agent's context, listing all available targets with usage instructions
-- **>15 targets**: Agent is instructed to use the `delegate_search` tool for hybrid FTS + semantic search (BM25 weight 0.3 + pgvector cosine weight 0.7)
-
-```
-delegate_search(query="billing payment refund")
-→ returns ranked list of matching agents with frontmatter
-→ agent picks the best match and delegates
-```
-
-### Key Differences from Subagents
-
-| Aspect | Subagents | Agent Delegation |
-|--------|-----------|-----------------|
-| Target | Anonymous clone of parent | Named agent with own identity |
-| Provider/Model | Inherited from parent | Target's own configuration |
-| Tools | Parent's tools minus deny list | Target's own tool registry + policy |
-| Context files | Simplified system prompt | Target's own SOUL.md, IDENTITY.md, etc. |
-| Session | Shared with parent | Isolated (fresh per delegation) |
-| Permission | Depth-based limits only | Explicit `agent_links` with direction |
-| User control | None | Per-user deny/allow via settings JSONB |
-| Concurrency | Global + per-parent limits | Per-link + per-target-agent limits |
+| Tool               | Group         | Description                                                  |
+| ------------------ | ------------- | ------------------------------------------------------------ |
+| `read_file`        | fs            | Read file contents (with virtual FS routing in managed mode) |
+| `write_file`       | fs            | Write/create files                                           |
+| `edit_file`        | fs            | Apply targeted edits to existing files                       |
+| `list_files`       | fs            | List directory contents                                      |
+| `search`           | fs            | Search file contents by pattern                              |
+| `glob`             | fs            | Find files by glob pattern                                   |
+| `exec`             | runtime       | Execute shell commands (with approval workflow)              |
+| `process`          | runtime       | Manage running processes                                     |
+| `web_search`       | web           | Search the web (Brave, DuckDuckGo)                           |
+| `web_fetch`        | web           | Fetch and parse web content                                  |
+| `memory_search`    | memory        | Search long-term memory (FTS + vector)                       |
+| `memory_get`       | memory        | Retrieve memory entries                                      |
+| `skill_search`     | —             | Search skills (BM25 + embedding hybrid in managed mode)      |
+| `image`            | —             | Image generation/manipulation                                |
+| `message`          | messaging     | Send messages to channels                                    |
+| `tts`              | —             | Text-to-Speech synthesis                                     |
+| `spawn`            | —             | Spawn a subagent                                             |
+| `subagents`        | sessions      | Control running subagents                                    |
+| `delegate`         | orchestration | Delegate tasks to other agents (sync/async, cancel, list)    |
+| `delegate_search`  | orchestration | Search delegation targets (hybrid FTS + semantic)            |
+| `handoff`          | orchestration | Transfer conversation control to another agent               |
+| `evaluate_loop`    | orchestration | Generate-evaluate-revise quality feedback loop               |
+| `team_tasks`       | teams         | Shared task board (list, create, claim, complete, search)    |
+| `team_message`     | teams         | Team mailbox (send, broadcast, read)                         |
+| `sessions_list`    | sessions      | List active sessions                                         |
+| `sessions_history` | sessions      | View session history                                         |
+| `sessions_send`    | sessions      | Send message to a session                                    |
+| `sessions_spawn`   | sessions      | Spawn a new session                                          |
+| `session_status`   | sessions      | Check session status                                         |
+| `cron`             | automation    | Schedule and manage cron jobs                                |
+| `gateway`          | automation    | Gateway administration                                       |
+| `browser`          | ui            | Browser automation (navigate, click, type, screenshot)       |
+| `canvas`           | ui            | Visual canvas for diagrams                                   |
 
 ## Browser Pairing
 
@@ -818,15 +898,21 @@ GOCLAW_OPENROUTER_API_KEY=sk-or-xxx go test -v ./tests/integration/ -timeout 120
 - **Memory system** — Long-term memory with search (FTS5 in standalone, pgvector hybrid in managed mode) implemented and tested with real conversations.
 - **Agent loop** — Think-act-observe cycle, tool use, session history, auto-summarization, and subagent spawning tested in production.
 - **WebSocket RPC protocol (v3)** — Connect handshake, chat streaming, event push all tested with web dashboard and integration tests.
-- **Store layer (PostgreSQL)** — All PG stores (sessions, agents, providers, skills, cron, pairing, tracing, memory) implemented and running in managed mode.
+- **Store layer (PostgreSQL)** — All PG stores (sessions, agents, providers, skills, cron, pairing, tracing, memory, teams) implemented and running in managed mode.
 - **Browser automation** — Rod/CDP integration for headless Chrome, tested in production agent workflows.
 - **Lane-based scheduler** — Main/subagent/delegate/cron lane isolation with concurrent execution tested. Group chats support up to 3 concurrent agent runs per session with adaptive throttle and deferred session writes for history isolation.
 - **Security hardening** — Rate limiting, prompt injection detection, CORS, shell deny patterns, SSRF protection, credential scrubbing all implemented and verified.
 - **Web dashboard (core)** — Channel management, agent management, pairing approval, traces & spans viewer all implemented and working well.
+- **Prompt caching** — Anthropic (explicit `cache_control`), OpenAI/MiniMax/OpenRouter (automatic). Cache metrics tracked in trace spans and displayed in web dashboard.
 
 ### Implemented but Not Fully Tested
 
 - **Agent delegation** — Inter-agent task delegation with permission links, sync/async modes, per-user restrictions, concurrency limits, and hybrid agent search. Core implementation complete, needs E2E testing with real multi-agent workflows.
+- **Agent teams** — Team creation with lead/member roles, shared task board (create, claim, complete, search, blocked_by dependencies), team mailbox (send, broadcast, read). Core implementation complete, needs E2E testing.
+- **Agent handoff** — Conversation transfer between agents with routing overrides. Implementation complete, needs E2E testing.
+- **Evaluate loop** — Generator-evaluator feedback cycles with configurable max rounds and pass criteria. Implementation complete, needs E2E testing.
+- **Quality gates** — Hook-based output validation with command and agent evaluator types. Implementation complete, needs E2E testing.
+- **Delegation history** — Queryable audit trail of inter-agent delegations. Implementation complete, needs validation at scale.
 - **Other messaging channels** — Discord, Zalo, Feishu/Lark, WhatsApp channel adapters are implemented but have not been tested end-to-end in production. Only Telegram has been validated with real users.
 - **Skill system** — BM25 search, ZIP upload, SKILL.md parsing, and embedding hybrid search are implemented. Basic functionality verified but no full E2E flow testing with real agent usage.
 - **Custom tools (runtime API)** — Shell-based custom tools with JSON Schema params, encrypted env vars, and HTTP CRUD are implemented. Not yet tested in a production workflow.
@@ -838,7 +924,7 @@ GOCLAW_OPENROUTER_API_KEY=sk-or-xxx go test -v ./tests/integration/ -timeout 120
 - **Tailscale integration** — tsnet listener implemented (build-tag gated). Not tested in a real deployment.
 - **Browser pairing** — Pairing code flow implemented with CLI and web UI approval. Basic flow tested but not validated at scale.
 - **HTTP API (`/v1/chat/completions`, `/v1/agents`, etc.)** — Endpoints implemented. Used by web dashboard but not tested for third-party consumer use cases.
-- **Web dashboard (other pages)** — Skills, MCP, custom tools, cron, sessions, and config pages have basic rendering but UX not yet optimized for easy management and monitoring.
+- **Web dashboard (other pages)** — Skills, MCP, custom tools, cron, sessions, teams, and config pages have basic rendering but UX not yet optimized for easy management and monitoring.
 
 ## Acknowledgments
 

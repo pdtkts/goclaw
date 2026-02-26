@@ -194,18 +194,67 @@ func (s *PGTeamStore) UpdateTask(ctx context.Context, taskID uuid.UUID, updates 
 	return execMapUpdate(ctx, s.db, "team_tasks", taskID, updates)
 }
 
-func (s *PGTeamStore) ListTasks(ctx context.Context, teamID uuid.UUID, orderBy string) ([]store.TeamTaskData, error) {
+func (s *PGTeamStore) ListTasks(ctx context.Context, teamID uuid.UUID, orderBy string, statusFilter string) ([]store.TeamTaskData, error) {
 	orderClause := "t.priority DESC, t.created_at"
 	if orderBy == "newest" {
 		orderClause = "t.created_at DESC"
+	}
+
+	statusWhere := "AND t.status != 'completed'" // default: active only
+	switch statusFilter {
+	case store.TeamTaskFilterAll:
+		statusWhere = ""
+	case store.TeamTaskFilterCompleted:
+		statusWhere = "AND t.status = 'completed'"
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT t.id, t.team_id, t.subject, t.description, t.status, t.owner_agent_id, t.blocked_by, t.priority, t.result, t.created_at, t.updated_at,
+		 COALESCE(a.agent_key, '') AS owner_agent_key
+		 FROM team_tasks t
+		 LEFT JOIN agents a ON a.id = t.owner_agent_id
+		 WHERE t.team_id = $1 `+statusWhere+`
+		 ORDER BY `+orderClause, teamID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTaskRowsJoined(rows)
+}
+
+func (s *PGTeamStore) GetTask(ctx context.Context, taskID uuid.UUID) (*store.TeamTaskData, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT t.id, t.team_id, t.subject, t.description, t.status, t.owner_agent_id, t.blocked_by, t.priority, t.result, t.created_at, t.updated_at,
+		 COALESCE(a.agent_key, '') AS owner_agent_key
+		 FROM team_tasks t
+		 LEFT JOIN agents a ON a.id = t.owner_agent_id
+		 WHERE t.id = $1`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tasks, err := scanTaskRowsJoined(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, fmt.Errorf("task not found")
+	}
+	return &tasks[0], nil
+}
+
+func (s *PGTeamStore) SearchTasks(ctx context.Context, teamID uuid.UUID, query string, limit int) ([]store.TeamTaskData, error) {
+	if limit <= 0 {
+		limit = 20
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT t.id, t.team_id, t.subject, t.description, t.status, t.owner_agent_id, t.blocked_by, t.priority, t.result, t.created_at, t.updated_at,
 		 COALESCE(a.agent_key, '') AS owner_agent_key
 		 FROM team_tasks t
 		 LEFT JOIN agents a ON a.id = t.owner_agent_id
-		 WHERE t.team_id = $1
-		 ORDER BY `+orderClause, teamID)
+		 WHERE t.team_id = $1 AND t.tsv @@ plainto_tsquery('simple', $2)
+		 ORDER BY ts_rank(t.tsv, plainto_tsquery('simple', $2)) DESC
+		 LIMIT $3`, teamID, query, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -270,6 +319,202 @@ func (s *PGTeamStore) CompleteTask(ctx context.Context, taskID uuid.UUID, result
 	}
 
 	return tx.Commit()
+}
+
+// ============================================================
+// Delegation History
+// ============================================================
+
+func (s *PGTeamStore) SaveDelegationHistory(ctx context.Context, record *store.DelegationHistoryData) error {
+	if record.ID == uuid.Nil {
+		record.ID = store.GenNewID()
+	}
+	now := time.Now()
+	record.CreatedAt = now
+
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO delegation_history (id, source_agent_id, target_agent_id, team_id, team_task_id, user_id, task, mode, status, result, error, iterations, trace_id, duration_ms, created_at, completed_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		record.ID, record.SourceAgentID, record.TargetAgentID,
+		record.TeamID, record.TeamTaskID,
+		record.UserID, record.Task, record.Mode, record.Status,
+		record.Result, record.Error, record.Iterations,
+		record.TraceID, record.DurationMS, now, record.CompletedAt,
+	)
+	return err
+}
+
+func (s *PGTeamStore) ListDelegationHistory(ctx context.Context, opts store.DelegationHistoryListOpts) ([]store.DelegationHistoryData, int, error) {
+	where := "WHERE 1=1"
+	args := []any{}
+	argN := 0
+
+	nextArg := func(v any) string {
+		argN++
+		args = append(args, v)
+		return fmt.Sprintf("$%d", argN)
+	}
+
+	if opts.SourceAgentID != nil {
+		where += " AND d.source_agent_id = " + nextArg(*opts.SourceAgentID)
+	}
+	if opts.TargetAgentID != nil {
+		where += " AND d.target_agent_id = " + nextArg(*opts.TargetAgentID)
+	}
+	if opts.TeamID != nil {
+		where += " AND d.team_id = " + nextArg(*opts.TeamID)
+	}
+	if opts.UserID != "" {
+		where += " AND d.user_id = " + nextArg(opts.UserID)
+	}
+	if opts.Status != "" {
+		where += " AND d.status = " + nextArg(opts.Status)
+	}
+
+	// Count total
+	var total int
+	countSQL := "SELECT COUNT(*) FROM delegation_history d " + where
+	if err := s.db.QueryRowContext(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	// Fetch rows
+	limit := opts.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	query := fmt.Sprintf(
+		`SELECT d.id, d.source_agent_id, d.target_agent_id, d.team_id, d.team_task_id,
+		 d.user_id, d.task, d.mode, d.status, d.result, d.error, d.iterations,
+		 d.trace_id, d.duration_ms, d.created_at, d.completed_at,
+		 COALESCE(sa.agent_key, '') AS source_agent_key,
+		 COALESCE(ta.agent_key, '') AS target_agent_key
+		 FROM delegation_history d
+		 LEFT JOIN agents sa ON sa.id = d.source_agent_id
+		 LEFT JOIN agents ta ON ta.id = d.target_agent_id
+		 %s
+		 ORDER BY d.created_at DESC
+		 LIMIT %s OFFSET %s`,
+		where, nextArg(limit), nextArg(offset))
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var records []store.DelegationHistoryData
+	for rows.Next() {
+		var d store.DelegationHistoryData
+		var result, errStr sql.NullString
+		var completedAt sql.NullTime
+		if err := rows.Scan(
+			&d.ID, &d.SourceAgentID, &d.TargetAgentID, &d.TeamID, &d.TeamTaskID,
+			&d.UserID, &d.Task, &d.Mode, &d.Status, &result, &errStr, &d.Iterations,
+			&d.TraceID, &d.DurationMS, &d.CreatedAt, &completedAt,
+			&d.SourceAgentKey, &d.TargetAgentKey,
+		); err != nil {
+			return nil, 0, err
+		}
+		if result.Valid {
+			d.Result = &result.String
+		}
+		if errStr.Valid {
+			d.Error = &errStr.String
+		}
+		if completedAt.Valid {
+			d.CompletedAt = &completedAt.Time
+		}
+		records = append(records, d)
+	}
+	return records, total, rows.Err()
+}
+
+func (s *PGTeamStore) GetDelegationHistory(ctx context.Context, id uuid.UUID) (*store.DelegationHistoryData, error) {
+	var d store.DelegationHistoryData
+	var result, errStr sql.NullString
+	var completedAt sql.NullTime
+
+	err := s.db.QueryRowContext(ctx,
+		`SELECT d.id, d.source_agent_id, d.target_agent_id, d.team_id, d.team_task_id,
+		 d.user_id, d.task, d.mode, d.status, d.result, d.error, d.iterations,
+		 d.trace_id, d.duration_ms, d.created_at, d.completed_at,
+		 COALESCE(sa.agent_key, '') AS source_agent_key,
+		 COALESCE(ta.agent_key, '') AS target_agent_key
+		 FROM delegation_history d
+		 LEFT JOIN agents sa ON sa.id = d.source_agent_id
+		 LEFT JOIN agents ta ON ta.id = d.target_agent_id
+		 WHERE d.id = $1`, id).Scan(
+		&d.ID, &d.SourceAgentID, &d.TargetAgentID, &d.TeamID, &d.TeamTaskID,
+		&d.UserID, &d.Task, &d.Mode, &d.Status, &result, &errStr, &d.Iterations,
+		&d.TraceID, &d.DurationMS, &d.CreatedAt, &completedAt,
+		&d.SourceAgentKey, &d.TargetAgentKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if result.Valid {
+		d.Result = &result.String
+	}
+	if errStr.Valid {
+		d.Error = &errStr.String
+	}
+	if completedAt.Valid {
+		d.CompletedAt = &completedAt.Time
+	}
+	return &d, nil
+}
+
+// ============================================================
+// Handoff routing
+// ============================================================
+
+func (s *PGTeamStore) SetHandoffRoute(ctx context.Context, route *store.HandoffRouteData) error {
+	if route.ID == uuid.Nil {
+		route.ID = store.GenNewID()
+	}
+	route.CreatedAt = time.Now()
+
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO handoff_routes (id, channel, chat_id, from_agent_key, to_agent_key, reason, created_by, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		 ON CONFLICT (channel, chat_id)
+		 DO UPDATE SET to_agent_key = EXCLUDED.to_agent_key, from_agent_key = EXCLUDED.from_agent_key,
+		               reason = EXCLUDED.reason, created_by = EXCLUDED.created_by, created_at = EXCLUDED.created_at`,
+		route.ID, route.Channel, route.ChatID, route.FromAgentKey, route.ToAgentKey,
+		route.Reason, route.CreatedBy, route.CreatedAt,
+	)
+	return err
+}
+
+func (s *PGTeamStore) GetHandoffRoute(ctx context.Context, channel, chatID string) (*store.HandoffRouteData, error) {
+	var d store.HandoffRouteData
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, channel, chat_id, from_agent_key, to_agent_key, reason, created_by, created_at
+		 FROM handoff_routes WHERE channel = $1 AND chat_id = $2`,
+		channel, chatID).Scan(
+		&d.ID, &d.Channel, &d.ChatID, &d.FromAgentKey, &d.ToAgentKey,
+		&d.Reason, &d.CreatedBy, &d.CreatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+func (s *PGTeamStore) ClearHandoffRoute(ctx context.Context, channel, chatID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM handoff_routes WHERE channel = $1 AND chat_id = $2`,
+		channel, chatID)
+	return err
 }
 
 // ============================================================

@@ -7,6 +7,7 @@ import { DeferredSpinner } from "@/components/shared/loading-skeleton";
 import { useTeams } from "./hooks/use-teams";
 import { TeamMembersTab } from "./team-members-tab";
 import { TeamTasksTab } from "./team-tasks-tab";
+import { TeamDelegationsTab } from "./team-delegations-tab";
 import type { TeamData, TeamMemberData } from "@/types/team";
 
 interface TeamDetailPageProps {
@@ -88,6 +89,7 @@ export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
           <TabsList>
             <TabsTrigger value="members">Members</TabsTrigger>
             <TabsTrigger value="tasks">Tasks</TabsTrigger>
+            <TabsTrigger value="delegations">Delegations</TabsTrigger>
           </TabsList>
 
           <TabsContent value="members" className="mt-4">
@@ -96,6 +98,10 @@ export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
 
           <TabsContent value="tasks" className="mt-4">
             <TeamTasksTab teamId={teamId} getTeamTasks={getTeamTasks} />
+          </TabsContent>
+
+          <TabsContent value="delegations" className="mt-4">
+            <TeamDelegationsTab teamId={teamId} />
           </TabsContent>
         </Tabs>
       </div>

@@ -20,11 +20,18 @@ type AgentsHandler struct {
 	token    string
 	msgBus   *bus.MessageBus  // for cache invalidation events (nil = no events)
 	summoner *AgentSummoner   // LLM-based agent setup (nil = disabled)
+	isOwner  func(string) bool // checks if user ID is a system owner (nil = no owners configured)
 }
 
 // NewAgentsHandler creates a handler for agent management endpoints.
-func NewAgentsHandler(agents store.AgentStore, token string, msgBus *bus.MessageBus, summoner *AgentSummoner) *AgentsHandler {
-	return &AgentsHandler{agents: agents, token: token, msgBus: msgBus, summoner: summoner}
+// isOwner is a function that checks if a user ID is in GOCLAW_OWNER_IDS (nil = disabled).
+func NewAgentsHandler(agents store.AgentStore, token string, msgBus *bus.MessageBus, summoner *AgentSummoner, isOwner func(string) bool) *AgentsHandler {
+	return &AgentsHandler{agents: agents, token: token, msgBus: msgBus, summoner: summoner, isOwner: isOwner}
+}
+
+// isOwnerUser checks if the given user ID is a system owner.
+func (h *AgentsHandler) isOwnerUser(userID string) bool {
+	return userID != "" && h.isOwner != nil && h.isOwner(userID)
 }
 
 // emitCacheInvalidate broadcasts a cache invalidation event if msgBus is set.
@@ -77,7 +84,13 @@ func (h *AgentsHandler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agents, err := h.agents.ListAccessible(r.Context(), userID)
+	var agents []store.AgentData
+	var err error
+	if h.isOwnerUser(userID) {
+		agents, err = h.agents.List(r.Context(), "") // owners see all agents
+	} else {
+		agents, err = h.agents.ListAccessible(r.Context(), userID)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -160,6 +173,8 @@ func (h *AgentsHandler) handleCreate(w http.ResponseWriter, r *http.Request) {
 
 func (h *AgentsHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 	userID := store.UserIDFromContext(r.Context())
+	isOwner := h.isOwnerUser(userID)
+
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		// Try by agent_key
@@ -168,7 +183,7 @@ func (h *AgentsHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
 			return
 		}
-		if userID != "" {
+		if userID != "" && !isOwner {
 			if ok, _, _ := h.agents.CanAccess(r.Context(), ag.ID, userID); !ok {
 				writeJSON(w, http.StatusForbidden, map[string]string{"error": "no access to this agent"})
 				return
@@ -184,7 +199,7 @@ func (h *AgentsHandler) handleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if userID != "" {
+	if userID != "" && !isOwner {
 		if ok, _, _ := h.agents.CanAccess(r.Context(), id, userID); !ok {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "no access to this agent"})
 			return
@@ -208,7 +223,7 @@ func (h *AgentsHandler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
 		return
 	}
-	if userID != "" && ag.OwnerID != userID {
+	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can update agent"})
 		return
 	}
@@ -249,7 +264,7 @@ func (h *AgentsHandler) handleDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
 		return
 	}
-	if userID != "" && ag.OwnerID != userID {
+	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can delete agent"})
 		return
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 // TeamTasksTool exposes the shared team task list to agents.
-// Actions: list, create, claim, complete.
+// Actions: list, get, create, claim, complete, search.
 type TeamTasksTool struct {
 	manager *TeamToolManager
 }
@@ -23,7 +23,7 @@ func NewTeamTasksTool(manager *TeamToolManager) *TeamTasksTool {
 func (t *TeamTasksTool) Name() string { return "team_tasks" }
 
 func (t *TeamTasksTool) Description() string {
-	return "Manage the shared team task list. Actions: list (view all tasks), create (add a new task), claim (self-assign a pending task), complete (mark your task as done with a result). See TEAM.md for your team context."
+	return "Manage the shared team task list. Actions: list (active tasks overview), get (full task detail with result), create, claim, complete, search. See TEAM.md for your team context."
 }
 
 func (t *TeamTasksTool) Parameters() map[string]interface{} {
@@ -32,7 +32,15 @@ func (t *TeamTasksTool) Parameters() map[string]interface{} {
 		"properties": map[string]interface{}{
 			"action": map[string]interface{}{
 				"type":        "string",
-				"description": "'list', 'create', 'claim', or 'complete'",
+				"description": "'list', 'get', 'create', 'claim', 'complete', or 'search'",
+			},
+			"status": map[string]interface{}{
+				"type":        "string",
+				"description": "Filter for action=list: '' (active only, default), 'completed', 'all'",
+			},
+			"query": map[string]interface{}{
+				"type":        "string",
+				"description": "Search query for action=search (searches subject and description)",
 			},
 			"subject": map[string]interface{}{
 				"type":        "string",
@@ -53,7 +61,7 @@ func (t *TeamTasksTool) Parameters() map[string]interface{} {
 			},
 			"task_id": map[string]interface{}{
 				"type":        "string",
-				"description": "Task ID (required for action=claim and action=complete)",
+				"description": "Task ID (required for action=get, claim, complete)",
 			},
 			"result": map[string]interface{}{
 				"type":        "string",
@@ -69,36 +77,99 @@ func (t *TeamTasksTool) Execute(ctx context.Context, args map[string]interface{}
 
 	switch action {
 	case "list":
-		return t.executeList(ctx)
+		return t.executeList(ctx, args)
+	case "get":
+		return t.executeGet(ctx, args)
 	case "create":
 		return t.executeCreate(ctx, args)
 	case "claim":
 		return t.executeClaim(ctx, args)
 	case "complete":
 		return t.executeComplete(ctx, args)
+	case "search":
+		return t.executeSearch(ctx, args)
 	default:
-		return ErrorResult(fmt.Sprintf("unknown action: %s (use list, create, claim, or complete)", action))
+		return ErrorResult(fmt.Sprintf("unknown action: %s (use list, get, create, claim, complete, or search)", action))
 	}
 }
 
-func (t *TeamTasksTool) executeList(ctx context.Context) *Result {
+func (t *TeamTasksTool) executeList(ctx context.Context, args map[string]interface{}) *Result {
 	team, _, err := t.manager.resolveTeam(ctx)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
 
-	tasks, err := t.manager.teamStore.ListTasks(ctx, team.ID, "priority")
+	statusFilter, _ := args["status"].(string)
+
+	tasks, err := t.manager.teamStore.ListTasks(ctx, team.ID, "priority", statusFilter)
 	if err != nil {
 		return ErrorResult("failed to list tasks: " + err.Error())
 	}
 
-	// Truncate results for LLM context (full results preserved in DB)
-	const maxResultRunes = 3000
+	// Strip results from list view — use action=get for full detail
+	for i := range tasks {
+		tasks[i].Result = nil
+	}
+
+	out, _ := json.Marshal(map[string]interface{}{
+		"tasks": tasks,
+		"count": len(tasks),
+	})
+	return SilentResult(string(out))
+}
+
+func (t *TeamTasksTool) executeGet(ctx context.Context, args map[string]interface{}) *Result {
+	taskIDStr, _ := args["task_id"].(string)
+	if taskIDStr == "" {
+		return ErrorResult("task_id is required for get action")
+	}
+	taskID, err := uuid.Parse(taskIDStr)
+	if err != nil {
+		return ErrorResult("invalid task_id")
+	}
+
+	task, err := t.manager.teamStore.GetTask(ctx, taskID)
+	if err != nil {
+		return ErrorResult("failed to get task: " + err.Error())
+	}
+
+	// Truncate result for context protection (full result in DB)
+	const maxResultRunes = 8000
+	if task.Result != nil {
+		r := []rune(*task.Result)
+		if len(r) > maxResultRunes {
+			s := string(r[:maxResultRunes]) + "..."
+			task.Result = &s
+		}
+	}
+
+	out, _ := json.Marshal(task)
+	return SilentResult(string(out))
+}
+
+func (t *TeamTasksTool) executeSearch(ctx context.Context, args map[string]interface{}) *Result {
+	team, _, err := t.manager.resolveTeam(ctx)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	query, _ := args["query"].(string)
+	if query == "" {
+		return ErrorResult("query is required for search action")
+	}
+
+	tasks, err := t.manager.teamStore.SearchTasks(ctx, team.ID, query, 20)
+	if err != nil {
+		return ErrorResult("failed to search tasks: " + err.Error())
+	}
+
+	// Show result snippets in search results
+	const maxSnippetRunes = 500
 	for i := range tasks {
 		if tasks[i].Result != nil {
 			r := []rune(*tasks[i].Result)
-			if len(r) > maxResultRunes {
-				s := string(r[:maxResultRunes]) + "..."
+			if len(r) > maxSnippetRunes {
+				s := string(r[:maxSnippetRunes]) + "..."
 				tasks[i].Result = &s
 			}
 		}

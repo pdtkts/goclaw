@@ -28,6 +28,13 @@ const (
 	TeamTaskStatusBlocked    = "blocked"
 )
 
+// Team task list filter constants (for ListTasks statusFilter parameter).
+const (
+	TeamTaskFilterActive    = ""          // default: pending + in_progress + blocked
+	TeamTaskFilterCompleted = "completed" // only completed tasks
+	TeamTaskFilterAll       = "all"       // all statuses
+)
+
 // Team message type constants.
 const (
 	TeamMessageTypeChat      = "chat"
@@ -77,6 +84,52 @@ type TeamTaskData struct {
 	OwnerAgentKey string `json:"owner_agent_key,omitempty"`
 }
 
+// DelegationHistoryData represents a persisted delegation record.
+type DelegationHistoryData struct {
+	BaseModel
+	SourceAgentID uuid.UUID  `json:"source_agent_id"`
+	TargetAgentID uuid.UUID  `json:"target_agent_id"`
+	TeamID        *uuid.UUID `json:"team_id,omitempty"`
+	TeamTaskID    *uuid.UUID `json:"team_task_id,omitempty"`
+	UserID        string     `json:"user_id,omitempty"`
+	Task          string     `json:"task"`
+	Mode          string     `json:"mode"`
+	Status        string     `json:"status"`
+	Result        *string    `json:"result,omitempty"`
+	Error         *string    `json:"error,omitempty"`
+	Iterations    int        `json:"iterations"`
+	TraceID       *uuid.UUID `json:"trace_id,omitempty"`
+	DurationMS    int        `json:"duration_ms"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+
+	// Joined fields
+	SourceAgentKey string `json:"source_agent_key,omitempty"`
+	TargetAgentKey string `json:"target_agent_key,omitempty"`
+}
+
+// DelegationHistoryListOpts configures delegation history queries.
+type DelegationHistoryListOpts struct {
+	SourceAgentID *uuid.UUID
+	TargetAgentID *uuid.UUID
+	TeamID        *uuid.UUID
+	UserID        string
+	Status        string // "completed", "failed", "" = all
+	Limit         int
+	Offset        int
+}
+
+// HandoffRouteData represents an active routing override for agent handoff.
+type HandoffRouteData struct {
+	ID           uuid.UUID `json:"id"`
+	Channel      string    `json:"channel"`
+	ChatID       string    `json:"chat_id"`
+	FromAgentKey string    `json:"from_agent_key"`
+	ToAgentKey   string    `json:"to_agent_key"`
+	Reason       string    `json:"reason,omitempty"`
+	CreatedBy    string    `json:"created_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 // TeamMessageData represents a message in the team mailbox.
 type TeamMessageData struct {
 	ID          uuid.UUID  `json:"id"`
@@ -113,8 +166,13 @@ type TeamStore interface {
 	// Tasks (shared task list)
 	CreateTask(ctx context.Context, task *TeamTaskData) error
 	UpdateTask(ctx context.Context, taskID uuid.UUID, updates map[string]any) error
-	// ListTasks returns tasks for a team. orderBy: "priority" (default) or "newest".
-	ListTasks(ctx context.Context, teamID uuid.UUID, orderBy string) ([]TeamTaskData, error)
+	// ListTasks returns tasks for a team. orderBy: "priority" or "newest".
+	// statusFilter: "" = non-completed (default), "completed", "all".
+	ListTasks(ctx context.Context, teamID uuid.UUID, orderBy string, statusFilter string) ([]TeamTaskData, error)
+	// GetTask returns a single task by ID with joined agent info.
+	GetTask(ctx context.Context, taskID uuid.UUID) (*TeamTaskData, error)
+	// SearchTasks performs FTS search over task subject+description.
+	SearchTasks(ctx context.Context, teamID uuid.UUID, query string, limit int) ([]TeamTaskData, error)
 
 	// ClaimTask atomically transitions a task from pending to in_progress.
 	// Only one agent can claim a given task (row-level lock, race-safe).
@@ -122,6 +180,16 @@ type TeamStore interface {
 
 	// CompleteTask marks a task as completed and unblocks dependent tasks.
 	CompleteTask(ctx context.Context, taskID uuid.UUID, result string) error
+
+	// Delegation history
+	SaveDelegationHistory(ctx context.Context, record *DelegationHistoryData) error
+	ListDelegationHistory(ctx context.Context, opts DelegationHistoryListOpts) ([]DelegationHistoryData, int, error)
+	GetDelegationHistory(ctx context.Context, id uuid.UUID) (*DelegationHistoryData, error)
+
+	// Handoff routing
+	SetHandoffRoute(ctx context.Context, route *HandoffRouteData) error
+	GetHandoffRoute(ctx context.Context, channel, chatID string) (*HandoffRouteData, error)
+	ClearHandoffRoute(ctx context.Context, channel, chatID string) error
 
 	// Messages (mailbox)
 	SendMessage(ctx context.Context, msg *TeamMessageData) error

@@ -581,7 +581,7 @@ func runGateway() {
 		}
 
 		wireManagedExtras(managedStores, agentRouter, providerRegistry, msgBus, sessStore, toolsReg, toolPE, skillsLoader, hasMemory, traceCollector, workspace, cfg.Gateway.InjectionAction, cfg, sandboxMgr, dynamicLoader)
-		agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH := wireManagedHTTP(managedStores, cfg.Gateway.Token, msgBus, toolsReg, providerRegistry)
+		agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH, delegationsH := wireManagedHTTP(managedStores, cfg.Gateway.Token, msgBus, toolsReg, providerRegistry, permPE.IsOwner)
 		if agentsH != nil {
 			server.SetAgentsHandler(agentsH)
 		}
@@ -602,6 +602,9 @@ func runGateway() {
 		}
 		if providersH != nil {
 			server.SetProvidersHandler(providersH)
+		}
+		if delegationsH != nil {
+			server.SetDelegationsHandler(delegationsH)
 		}
 	}
 
@@ -624,7 +627,12 @@ func runGateway() {
 		configSecretsStore = managedStores.ConfigSecrets
 	}
 
-	pairingMethods := registerAllMethods(server, agentRouter, sessStore, cronStore, pairingStore, cfg, cfgPath, workspace, dataDir, msgBus, execApprovalMgr, agentStoreForRPC, isManaged, skillStore, configSecretsStore)
+	var teamStoreForRPC store.TeamStore
+	if managedStores != nil {
+		teamStoreForRPC = managedStores.Teams
+	}
+
+	pairingMethods := registerAllMethods(server, agentRouter, sessStore, cronStore, pairingStore, cfg, cfgPath, workspace, dataDir, msgBus, execApprovalMgr, agentStoreForRPC, isManaged, skillStore, configSecretsStore, teamStoreForRPC)
 
 	// Channel manager
 	channelMgr := channels.NewManager(msgBus)
@@ -812,7 +820,11 @@ func runGateway() {
 	})
 
 	// Start inbound message consumer (channel → scheduler → agent → channel)
-	go consumeInboundMessages(ctx, msgBus, agentRouter, cfg, sched, channelMgr)
+	var consumerTeamStore store.TeamStore
+	if managedStores != nil {
+		consumerTeamStore = managedStores.Teams
+	}
+	go consumeInboundMessages(ctx, msgBus, agentRouter, cfg, sched, channelMgr, consumerTeamStore)
 
 	go func() {
 		sig := <-sigCh
