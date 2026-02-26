@@ -74,7 +74,7 @@ The first request from a client must be `connect`. Any other method sent before 
 ### Event Frame Structure
 
 - `type`: always `"event"`
-- `event`: event name (e.g., `chat`, `agent`, `status`)
+- `event`: event name (e.g., `chat`, `agent`, `status`, `handoff`)
 - `payload`: event data
 - `seq`: ordering sequence number
 - `stateVersion`: version counters for optimistic state sync
@@ -112,7 +112,7 @@ flowchart LR
 |------|--------------------|
 | viewer | `agents.list`, `config.get`, `sessions.list`, `sessions.preview`, `health`, `status`, `models.list`, `skills.list`, `skills.get`, `channels.list`, `channels.status`, `cron.list`, `cron.status`, `cron.runs`, `usage.get`, `usage.summary` |
 | operator | All viewer methods plus: `chat.send`, `chat.abort`, `chat.history`, `chat.inject`, `sessions.delete`, `sessions.reset`, `sessions.patch`, `cron.create`, `cron.update`, `cron.delete`, `cron.toggle`, `cron.run`, `skills.update`, `send`, `exec.approval.list`, `exec.approval.approve`, `exec.approval.deny`, `device.pair.request`, `device.pair.list` |
-| admin | All operator methods plus: `config.apply`, `config.patch`, `agents.create`, `agents.update`, `agents.delete`, `agents.files.*`, `channels.toggle`, `device.pair.approve`, `device.pair.revoke` |
+| admin | All operator methods plus: `config.apply`, `config.patch`, `agents.create`, `agents.update`, `agents.delete`, `agents.files.*`, `agents.links.*`, `teams.*`, `channels.toggle`, `device.pair.approve`, `device.pair.revoke` |
 
 ---
 
@@ -261,6 +261,32 @@ flowchart TD
 | `browser.snapshot` | Get DOM snapshot |
 | `browser.screenshot` | Take screenshot |
 
+### Agent Links
+
+| Method | Description |
+|--------|-------------|
+| `agents.links.list` | List agent links (by source agent) |
+| `agents.links.create` | Create an agent link (outbound or bidirectional) |
+| `agents.links.update` | Update a link (max_concurrent, settings, status) |
+| `agents.links.delete` | Delete an agent link |
+
+### Teams
+
+| Method | Description |
+|--------|-------------|
+| `teams.list` | List agent teams |
+| `teams.create` | Create a team (lead + members) |
+| `teams.get` | Get team details with members |
+| `teams.delete` | Delete a team |
+| `teams.tasks.list` | List team tasks |
+
+### Delegations
+
+| Method | Description |
+|--------|-------------|
+| `delegations.list` | List delegation history (result truncated to 500 runes) |
+| `delegations.get` | Get delegation detail (result truncated to 8000 runes) |
+
 ### Other
 
 | Method | Description |
@@ -351,6 +377,30 @@ All managed endpoints require `Authorization: Bearer <token>` and `X-GoClaw-User
 | GET | `/v1/mcp/requests` | List pending access requests |
 | POST | `/v1/mcp/requests/{id}/review` | Approve or reject a request |
 
+**Agent Sharing** (`/v1/agents/{id}/sharing`):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/agents/{id}/sharing` | List shares for an agent |
+| POST | `/v1/agents/{id}/sharing` | Share agent with a user |
+| DELETE | `/v1/agents/{id}/sharing/{userID}` | Revoke user access |
+
+**Agent Links** (`/v1/agents/{id}/links`):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/agents/{id}/links` | List links for an agent |
+| POST | `/v1/agents/{id}/links` | Create a new link |
+| PUT | `/v1/agents/{id}/links/{linkID}` | Update a link |
+| DELETE | `/v1/agents/{id}/links/{linkID}` | Delete a link |
+
+**Delegations** (`/v1/delegations`):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/v1/delegations` | List delegation history (full records, paginated) |
+| GET | `/v1/delegations/{id}` | Get delegation detail |
+
 **Skills** (`/v1/skills`):
 
 | Method | Path | Description |
@@ -422,6 +472,9 @@ Error responses include `retryable` (boolean) and `retryAfterMs` (integer) field
 | `internal/gateway/methods/config.go` | config.get/apply/patch/schema handlers |
 | `internal/gateway/methods/skills.go` | skills.list/get/update handlers |
 | `internal/gateway/methods/cron.go` | cron.list/create/update/delete/toggle/run/runs handlers |
+| `internal/gateway/methods/agent_links.go` | agents.links.* handlers + agent router cache invalidation |
+| `internal/gateway/methods/teams.go` | teams.* handlers + auto-linking teammates |
+| `internal/gateway/methods/delegations.go` | delegations.list/get handlers |
 | `internal/gateway/methods/channels.go` | channels.list/status handlers |
 | `internal/gateway/methods/pairing.go` | device.pair.* handlers |
 | `internal/gateway/methods/exec_approval.go` | exec.approval.* handlers |
@@ -433,6 +486,8 @@ Error responses include `retryable` (boolean) and `retryAfterMs` (integer) field
 | `internal/http/agents.go` | Agent CRUD HTTP handlers (managed mode) |
 | `internal/http/skills.go` | Skills HTTP handlers (managed mode) |
 | `internal/http/traces.go` | Traces HTTP handlers (managed mode) |
+| `internal/http/delegations.go` | Delegation history HTTP handlers |
+| `internal/http/summoner.go` | LLM-powered agent setup (XML parsing, context file generation) |
 | `internal/http/auth.go` | Bearer token authentication, timing-safe comparison |
 | `internal/permissions/policy.go` | PolicyEngine: role hierarchy, method-to-role mapping |
 | `pkg/protocol/frames.go` | Frame types: RequestFrame, ResponseFrame, EventFrame, ErrorShape |

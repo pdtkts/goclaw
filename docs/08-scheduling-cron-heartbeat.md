@@ -30,6 +30,11 @@ flowchart TD
         S4["Subagent 4"]
     end
 
+    subgraph "Lane: delegate (concurrency = 100)"
+        D1["Delegation 1"]
+        D2["Delegation 2"]
+    end
+
     subgraph "Lane: cron (concurrency = 1)"
         C1["Cron job"]
     end
@@ -42,44 +47,35 @@ flowchart TD
 
 ### Lane Defaults
 
-| Lane | Concurrency | Purpose |
-|------|:-----------:|---------|
-| `main` | 2 | Primary user chat sessions |
-| `subagent` | 4 | Sub-agents spawned by the main agent |
-| `cron` | 1 | Scheduled cron jobs (sequential to avoid conflicts) |
+| Lane | Concurrency | Env Override | Purpose |
+|------|:-----------:|-------------|---------|
+| `main` | 2 | `GOCLAW_LANE_MAIN` | Primary user chat sessions |
+| `subagent` | 4 | `GOCLAW_LANE_SUBAGENT` | Sub-agents spawned by the main agent |
+| `delegate` | 100 | `GOCLAW_LANE_DELEGATE` | Agent delegation executions |
+| `cron` | 1 | `GOCLAW_LANE_CRON` | Scheduled cron jobs (sequential to avoid conflicts) |
 
-`GetOrCreate()` allows creating new lanes on demand with custom concurrency. Session serialization ensures only one agent run executes at a time per session key.
+`GetOrCreate()` allows creating new lanes on demand with custom concurrency. All lane concurrency values are configurable via environment variables.
 
 ---
 
-## 2. Session Queue -- 3 Modes
+## 2. Session Queue
 
-Each session key gets a dedicated queue that serializes agent runs. Only one run is active at a time; additional messages are queued according to the configured mode.
+Each session key gets a dedicated queue that manages agent runs. The queue supports configurable concurrent runs per session.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Enqueue: Message arrives
-    Enqueue --> Running: No active run
-    Enqueue --> Queued: Active run exists
+### Concurrent Runs
 
-    state "Queue Mode" as QM {
-        Queued --> Running: Previous run completed
-    }
+| Context | `maxConcurrent` | Rationale |
+|---------|:--------------:|-----------|
+| DMs | 1 | Single-threaded per user (no interleaving) |
+| Groups | 3 | Multiple users can get responses in parallel |
 
-    state "Interrupt Mode" as IM {
-        Queued --> CancelActive: Cancel current run
-        CancelActive --> Running: Start immediately
-    }
-
-    Running --> [*]: Completed
-    Running --> Queued: Next message waiting
-```
+**Adaptive throttle**: When session history exceeds 60% of the context window, concurrency drops to 1 to prevent context window overflow.
 
 ### Queue Modes
 
 | Mode | Behavior |
 |------|----------|
-| `queue` (default) | FIFO -- messages wait until the current run completes |
+| `queue` (default) | FIFO -- messages wait until a run slot is available |
 | `followup` | Same as `queue` -- messages are queued as follow-ups |
 | `interrupt` | Cancel the active run, drain the queue, start the new message immediately |
 
@@ -103,7 +99,26 @@ When the queue reaches capacity, one of two drop policies applies.
 
 ---
 
-## 3. Cron Lifecycle
+## 3. /stop and /stopall Commands
+
+Cancel commands for Telegram and other channels.
+
+| Command | Behavior |
+|---------|----------|
+| `/stop` | Cancel the oldest running task; others keep going |
+| `/stopall` | Cancel all running tasks + drain the queue |
+
+### Implementation Details
+
+- **Debouncer bypass**: `/stop` and `/stopall` are intercepted before the 800ms debouncer to avoid being merged with the next user message
+- **Cancel mechanism**: `SessionQueue.Cancel()` exposes the `CancelFunc` from the scheduler. Context cancellation propagates to the agent loop
+- **Empty outbound**: On cancel, an empty outbound message is published to trigger cleanup (stop typing indicator, clear reactions)
+- **Trace finalization**: When `ctx.Err() != nil`, trace finalization falls back to `context.Background()` for the final DB write. Status is set to `"cancelled"`
+- **Context survival**: Context values (traceID, collector) survive cancellation -- only the Done channel fires
+
+---
+
+## 4. Cron Lifecycle
 
 Scheduled tasks that run agent turns automatically. The run loop checks every second for due jobs.
 
@@ -147,7 +162,7 @@ Jobs can be `active` or `paused`. Paused jobs skip execution during the due chec
 
 ---
 
-## 4. Heartbeat -- 5 Steps
+## 5. Heartbeat -- 5 Steps
 
 Periodically wakes the agent to check on events (calendar, inbox, alerts) and surfaces anything that needs attention.
 

@@ -69,6 +69,8 @@ func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			cfg.applyEnvOverrides()
+			cfg.applyContextPruningDefaults()
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("read config: %w", err)

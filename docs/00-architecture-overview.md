@@ -4,10 +4,10 @@
 
 GoClaw is an AI agent gateway written in Go. It exposes a WebSocket RPC (v3) interface and an OpenAI-compatible HTTP API for orchestrating LLM-powered agents. The system supports two operating modes:
 
-- **Standalone** -- file-based storage, single-user, zero external dependencies beyond an LLM API key.
-- **Managed** -- PostgreSQL-backed multi-tenant mode with HTTP CRUD APIs, per-user context files, encrypted credentials, and LLM call tracing.
+- **Standalone** -- file-based storage with SQLite for per-user data, zero external dependencies beyond an LLM API key.
+- **Managed** -- PostgreSQL-backed multi-tenant mode with HTTP CRUD APIs, per-user context files, encrypted credentials, agent delegation, teams, and LLM call tracing.
 
-> **Documentation scope**: This documentation is written for **managed mode** (PostgreSQL multi-tenant), which is the recommended production deployment. Standalone mode is functionally equivalent to the original OpenClaw -- all users share the same workspace, sessions, and context files with no per-user isolation, no encrypted secrets, no tracing, and no HTTP CRUD APIs. The remainder of this documentation assumes managed mode unless stated otherwise.
+> **Documentation scope**: This documentation covers both modes. Standalone mode now has near-parity with managed mode for core features (per-user context files, workspace isolation, agent types, bootstrap onboarding). Managed mode adds agent delegation, teams, quality gates, tracing, HTTP CRUD APIs, and encrypted secrets.
 
 ## 2. Component Diagram
 
@@ -38,7 +38,7 @@ flowchart TD
 
     subgraph Core["Core Engine"]
         BUS[Message Bus]
-        SCHED[Scheduler -- 3 Lanes]
+        SCHED[Scheduler -- 4 Lanes]
         AR[Agent Router]
         LOOP[Agent Loop -- Think / Act / Observe]
     end
@@ -54,11 +54,21 @@ flowchart TD
         WEB[Web Search / Fetch]
         MEM[Memory]
         SUB[Subagent]
+        DEL[Delegation]
+        TEAM_T[Teams]
+        EVAL[Evaluate Loop]
+        HO[Handoff]
         TTS_T[TTS]
         BROW[Browser]
         SK[Skills]
         MCP_T[MCP Bridge]
         CT[Custom Tools]
+    end
+
+    subgraph Hooks["Hook Engine"]
+        HE[Engine]
+        CMD_E[Command Evaluator]
+        AGT_E[Agent Evaluator]
     end
 
     subgraph Store["Store Layer"]
@@ -71,6 +81,8 @@ flowchart TD
         TRACE_S[TracingStore]
         MCP_S[MCPServerStore]
         CT_S[CustomToolStore]
+        AL_S[AgentLinkStore]
+        TM_S[TeamStore]
     end
 
     WS --> WSS
@@ -89,6 +101,8 @@ flowchart TD
     LOOP --> Providers
     LOOP --> Tools
     Tools --> Store
+    Tools --> Hooks
+    Hooks --> Tools
     LOOP --> Store
 ```
 
@@ -97,21 +111,22 @@ flowchart TD
 | Module | Description |
 |--------|-------------|
 | `internal/gateway/` | WebSocket + HTTP server, client handling, method router |
-| `internal/gateway/methods/` | RPC method handlers: chat, agents, sessions, config, skills, cron, pairing, exec approval, usage, send |
-| `internal/agent/` | Agent loop (think, act, observe), router, resolver, system prompt builder, sanitization, pruning, tracing, memory flush |
+| `internal/gateway/methods/` | RPC method handlers: chat, agents, agent_links, teams, delegations, sessions, config, skills, cron, pairing, exec approval, usage, send |
+| `internal/agent/` | Agent loop (think, act, observe), router, resolver, system prompt builder, sanitization, pruning, tracing, memory flush, DELEGATION.md + TEAM.md injection |
 | `internal/providers/` | LLM providers: Anthropic (native HTTP + SSE streaming), OpenAI-compatible (HTTP + SSE), retry logic |
-| `internal/tools/` | Tool registry, filesystem ops, exec/shell, policy engine, subagent, context file + memory interceptors, credential scrubbing, rate limiting |
+| `internal/tools/` | Tool registry, filesystem ops, exec/shell, policy engine, subagent, delegation manager, team tools, evaluate loop, handoff, context file + memory interceptors, credential scrubbing, rate limiting, PathDenyable |
 | `internal/tools/dynamic_loader.go` | Custom tool loader: LoadGlobal (startup), LoadForAgent (per-agent clone), ReloadGlobal (cache invalidation) |
 | `internal/tools/dynamic_tool.go` | Custom tool executor: command template rendering, shell escaping, encrypted env vars |
-| `internal/store/` | Store interfaces: SessionStore, AgentStore, ProviderStore, SkillStore, MemoryStore, CronStore, PairingStore, TracingStore, MCPServerStore |
+| `internal/hooks/` | Hook engine: quality gates, command evaluator, agent evaluator, recursion prevention (`WithSkipHooks`) |
+| `internal/store/` | Store interfaces: SessionStore, AgentStore, ProviderStore, SkillStore, MemoryStore, CronStore, PairingStore, TracingStore, MCPServerStore, AgentLinkStore, TeamStore, ChannelInstanceStore, ConfigSecretsStore |
 | `internal/store/pg/` | PostgreSQL implementations (`database/sql` + `pgx/v5`) |
-| `internal/store/file/` | File-based implementations (standalone mode) |
+| `internal/store/file/` | File-based implementations: sessions, memory (SQLite), cron, pairing, skills, agents (filesystem + SQLite) |
 | `internal/bootstrap/` | System prompt files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md) + seeding + truncation |
 | `internal/config/` | Config loading (JSON5) + env var overlay |
 | `internal/skills/` | SKILL.md loader (5-tier hierarchy) + BM25 search + hot-reload via fsnotify |
 | `internal/channels/` | Channel manager + adapters: Telegram, Feishu/Lark, Zalo, Discord, WhatsApp |
 | `internal/mcp/` | MCP server bridge (stdio, SSE, streamable-HTTP transports) |
-| `internal/scheduler/` | Lane-based concurrency control (main, subagent, cron lanes) with per-session serialization |
+| `internal/scheduler/` | Lane-based concurrency control (main, subagent, cron, delegate lanes) with per-session serialization |
 | `internal/memory/` | Memory system (SQLite FTS5 + embeddings for standalone mode) |
 | `internal/permissions/` | RBAC policy engine (admin, operator, viewer roles) |
 | `internal/pairing/` | DM/device pairing service (8-character codes) |
@@ -119,7 +134,7 @@ flowchart TD
 | `internal/bus/` | Event pub/sub (Message Bus) |
 | `internal/sandbox/` | Docker-based code execution sandbox |
 | `internal/tts/` | Text-to-Speech providers: OpenAI, ElevenLabs, Edge, MiniMax |
-| `internal/http/` | HTTP API handlers: /v1/chat/completions, /v1/agents, /v1/skills, /v1/traces, /v1/mcp |
+| `internal/http/` | HTTP API handlers: /v1/chat/completions, /v1/agents, /v1/skills, /v1/traces, /v1/mcp, /v1/delegations, summoner |
 | `internal/crypto/` | AES-256-GCM encryption for API keys |
 | `internal/tracing/` | LLM call tracing (traces + spans), in-memory buffer with periodic store flush |
 | `internal/tracing/otelexport/` | Optional OpenTelemetry OTLP exporter (opt-in via build tags; adds gRPC + protobuf) |
@@ -132,19 +147,24 @@ flowchart TD
 | Aspect | Standalone | Managed |
 |--------|-----------|---------|
 | Config source | `config.json` + env vars | `config.json` + `GOCLAW_POSTGRES_DSN` |
-| Storage | JSON files on disk | PostgreSQL |
+| Storage | JSON files + SQLite (`~/.goclaw/data/agents.db`) | PostgreSQL |
 | Agents | Defined in `config.json` `agents.list`, created eagerly at startup | `agents` table, lazy-resolved via `ManagedResolver` |
-| Context files | Workspace filesystem (SOUL.md, IDENTITY.md, etc.) | `agent_context_files` + `user_context_files` tables |
-| Agent types | N/A | `open` (7 per-user files) / `predefined` (agent-level + USER.md per-user) |
+| Agent store | `FileAgentStore` (filesystem + SQLite) | `PGAgentStore` |
+| Context files | Agent-level on filesystem, per-user in SQLite | `agent_context_files` + `user_context_files` tables |
+| Agent types | `open` / `predefined` (via config) | `open` (7 per-user files) / `predefined` (agent-level + USER.md per-user) |
+| Per-user isolation | Workspace subdirectories (`user_alice/`, `user_bob/`) | Same + DB-scoped context files |
+| Bootstrap onboarding | Per-user BOOTSTRAP.md seeding (SQLite) | Same (PostgreSQL) |
+| Agent delegation | N/A | Sync/async delegation, agent links, quality gates |
+| Agent teams | N/A | Shared task board, mailbox, handoff |
 | Skills | Filesystem only (workspace + global dirs) | PostgreSQL + filesystem + embedding search |
 | Memory | SQLite FTS5 + embeddings | pgvector hybrid (full-text search + vector similarity) |
 | Tracing | N/A | `traces` + `spans` tables + optional OTel OTLP export |
 | MCP servers | `config.json` `tools.mcp_servers` | `mcp_servers` table + grants |
 | API key storage | `.env.local` / env vars only | PostgreSQL (AES-256-GCM encrypted) |
-| HTTP CRUD API | N/A | `/v1/agents`, `/v1/skills`, `/v1/traces`, `/v1/mcp` |
-| Virtual FS | Direct disk I/O | `ContextFileInterceptor` routes read_file/write_file to database |
+| HTTP CRUD API | N/A | `/v1/agents`, `/v1/skills`, `/v1/traces`, `/v1/mcp`, `/v1/delegations` |
+| Virtual FS | `ContextFileInterceptor` routes to SQLite | `ContextFileInterceptor` routes to PostgreSQL |
 | Custom tools | N/A | `custom_tools` table + `DynamicToolLoader` |
-| Managed-only stores (nil in standalone) | -- | AgentStore, ProviderStore, TracingStore, MCPServerStore, CustomToolStore |
+| Managed-only stores (nil in standalone) | -- | ProviderStore, TracingStore, MCPServerStore, CustomToolStore, AgentLinkStore, TeamStore |
 
 ---
 
@@ -241,12 +261,13 @@ sequenceDiagram
         GW->>GW: 16. Wire managed HTTP handlers (agents, skills, traces, MCP)
     else Standalone mode
         GW->>GW: 14. Create agents eagerly from config
+        GW->>GW: 15. wireStandaloneExtras (FileAgentStore, interceptors, callbacks)
     end
 
     GW->>Engine: 17. Create gateway server (WS + HTTP)
     GW->>Engine: 18. Register RPC methods
     GW->>Engine: 19. Register + start channels (Telegram, Discord, Feishu, Zalo, WhatsApp)
-    GW->>Engine: 20. Start cron, heartbeat, scheduler (3 lanes)
+    GW->>Engine: 20. Start cron, heartbeat, scheduler (4 lanes)
     GW->>Engine: 21. Start skills watcher + inbound consumer
     GW->>Engine: 22. Listen on host:port
 ```
@@ -255,7 +276,7 @@ sequenceDiagram
 
 ## 7. Managed Mode Wiring
 
-The `wireManagedExtras()` function in `cmd/gateway_managed.go` performs 7 steps to wire multi-tenant components:
+The `wireManagedExtras()` function in `cmd/gateway_managed.go` wires multi-tenant components:
 
 ```mermaid
 flowchart TD
@@ -265,8 +286,14 @@ flowchart TD
     W4["4. ManagedResolver<br/>Lazy-creates agent Loops from DB on cache miss"] --> W5
     W5["5. Virtual FS Interceptors<br/>Wire interceptors on read_file + write_file + memory tools"] --> W6
     W6["6. Memory Store Wiring<br/>Wire PGMemoryStore on memory_search + memory_get tools"] --> W7
-    W7["7. Cache Invalidation Subscribers<br/>Subscribe to MessageBus events"]
+    W7["7. Cache Invalidation Subscribers<br/>Subscribe to MessageBus events"] --> W8
+    W8["8. Delegation Tools<br/>DelegateManager + delegate_search + agent links"] --> W9
+    W9["9. Team Tools<br/>team_tasks + team_message + team auto-linking"] --> W10
+    W10["10. Hook Engine<br/>Quality gates with command + agent evaluators"] --> W11
+    W11["11. Evaluate Loop + Handoff<br/>evaluate_loop tool + handoff tool"]
 ```
+
+A separate `wireStandaloneExtras()` in `cmd/gateway_standalone.go` wires the same core callbacks (user seeding, context file loading) using `FileAgentStore` instead of PostgreSQL.
 
 ### Cache Invalidation Events
 
@@ -282,7 +309,7 @@ flowchart TD
 
 ## 8. Scheduler Lanes
 
-The scheduler uses a lane-based concurrency model. Each lane is a named worker pool with a bounded semaphore. Per-session serialization ensures only one agent run executes at a time per session key.
+The scheduler uses a lane-based concurrency model. Each lane is a named worker pool with a bounded semaphore. Per-session queues control concurrency within each session.
 
 ```mermaid
 flowchart TD
@@ -295,20 +322,42 @@ flowchart TD
         S1[Subagent executions]
     end
 
+    subgraph Del["Lane: delegate (concurrency 100)"]
+        D1[Delegation executions]
+    end
+
     subgraph Cron["Lane: cron (concurrency 1)"]
         C1[Cron job executions]
     end
 
     Main --> SEM1[Semaphore]
     Sub --> SEM2[Semaphore]
-    Cron --> SEM3[Semaphore]
+    Del --> SEM3[Semaphore]
+    Cron --> SEM4[Semaphore]
 
-    SEM1 --> Q[Per-Session Queue<br/>1 run at a time per session]
+    SEM1 --> Q[Per-Session Queue]
     SEM2 --> Q
     SEM3 --> Q
+    SEM4 --> Q
 
     Q --> AGENT[Agent Loop]
 ```
+
+### Lane Defaults
+
+| Lane | Concurrency | Env Override | Purpose |
+|------|:-----------:|-------------|---------|
+| `main` | 2 | `GOCLAW_LANE_MAIN` | Primary user chat sessions |
+| `subagent` | 4 | `GOCLAW_LANE_SUBAGENT` | Spawned subagents |
+| `delegate` | 100 | `GOCLAW_LANE_DELEGATE` | Agent delegation executions |
+| `cron` | 1 | `GOCLAW_LANE_CRON` | Scheduled cron jobs |
+
+### Session Queue Concurrency
+
+Per-session queues now support configurable `maxConcurrent`:
+- **DMs**: `maxConcurrent = 1` (single-threaded per user)
+- **Groups**: `maxConcurrent = 3` (multiple concurrent responses)
+- **Adaptive throttle**: When session history exceeds 60% of context window, concurrency drops to 1
 
 ### Queue Modes
 
@@ -319,6 +368,13 @@ flowchart TD
 | `interrupt` | Cancels the active run and replaces it with the new message |
 
 Default queue config: capacity 10, drop policy `old` (drops oldest on overflow), debounce 800ms.
+
+### /stop and /stopall
+
+- `/stop` -- Cancel the oldest running task (others keep going)
+- `/stopall` -- Cancel all running tasks + drain the queue
+
+Both are intercepted before the debouncer to avoid being merged with normal messages.
 
 ---
 
@@ -382,6 +438,9 @@ flowchart TD
 | `cmd/root.go` | Cobra CLI entry point, flag parsing |
 | `cmd/gateway.go` | Gateway startup orchestrator (`runGateway()`) |
 | `cmd/gateway_managed.go` | Managed mode wiring (`wireManagedExtras()`, `wireManagedHTTP()`) |
+| `cmd/gateway_standalone.go` | Standalone mode wiring (`wireStandaloneExtras()`) |
+| `cmd/gateway_callbacks.go` | Shared callbacks for managed + standalone (user seeding, context file loading) |
+| `cmd/gateway_consumer.go` | Inbound message consumer (subagent, delegate, teammate, handoff routing) |
 | `cmd/gateway_providers.go` | Provider registration (config-based + DB-based) |
 | `cmd/gateway_methods.go` | RPC method registration |
 | `internal/config/config.go` | Config struct definitions |
@@ -392,7 +451,11 @@ flowchart TD
 | `internal/gateway/router.go` | RPC method routing |
 | `internal/scheduler/lanes.go` | Lane definitions, semaphore-based concurrency |
 | `internal/scheduler/queue.go` | Per-session queue, queue modes, debounce |
-| `internal/store/stores.go` | `Stores` container struct (all store interfaces) |
+| `internal/hooks/engine.go` | Hook engine: evaluator registry, `EvaluateHooks` |
+| `internal/hooks/command_evaluator.go` | Shell command evaluator (exit 0 = pass) |
+| `internal/hooks/agent_evaluator.go` | Agent delegation evaluator (APPROVED/REJECTED) |
+| `internal/hooks/context.go` | `WithSkipHooks` / `SkipHooksFromContext` (recursion prevention) |
+| `internal/store/stores.go` | `Stores` container struct (all 14 store interfaces) |
 | `internal/store/types.go` | `StoreConfig`, `BaseModel` |
 
 ---

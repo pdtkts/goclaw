@@ -27,7 +27,6 @@ prompt.md
 ui/web/node_modules/
 ui/web/dist/
 ui/web/.vite/
-ui/web/pnpm-lock.yaml
 
 .mcp.json
 tmp

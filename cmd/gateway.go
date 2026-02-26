@@ -59,7 +59,11 @@ func runGateway() {
 	}
 
 	// Auto-detect: if no provider API key is configured, help the user.
-	if !cfg.HasAnyProvider() {
+	// Also trigger auto-onboard when config file doesn't exist (first run),
+	// even if env vars provide API keys — managed mode needs DB seeding.
+	_, cfgStatErr := os.Stat(cfgPath)
+	configMissing := os.IsNotExist(cfgStatErr)
+	if !cfg.HasAnyProvider() || configMissing {
 		// Docker / CI: env vars provide API keys → non-interactive auto-onboard.
 		if canAutoOnboard() {
 			if runAutoOnboard(cfgPath) {

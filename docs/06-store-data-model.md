@@ -12,9 +12,9 @@ flowchart TD
     CHECK -->|Yes| PG["PostgreSQL Backend"]
     CHECK -->|No| FILE["File Backend"]
 
-    PG --> PG_STORES["PGSessionStore<br/>PGAgentStore<br/>PGProviderStore<br/>PGCronStore<br/>PGPairingStore<br/>PGSkillStore<br/>PGMemoryStore<br/>PGTracingStore<br/>PGMCPServerStore<br/>PGCustomToolStore"]
+    PG --> PG_STORES["PGSessionStore<br/>PGAgentStore<br/>PGProviderStore<br/>PGCronStore<br/>PGPairingStore<br/>PGSkillStore<br/>PGMemoryStore<br/>PGTracingStore<br/>PGMCPServerStore<br/>PGCustomToolStore<br/>PGChannelInstanceStore<br/>PGConfigSecretsStore<br/>PGAgentLinkStore<br/>PGTeamStore"]
 
-    FILE --> FILE_STORES["FileSessionStore<br/>FileMemoryStore (SQLite + FTS5)<br/>FileCronStore<br/>FilePairingStore<br/>FileSkillStore<br/>AgentStore = nil<br/>ProviderStore = nil<br/>TracingStore = nil<br/>MCPServerStore = nil<br/>CustomToolStore = nil"]
+    FILE --> FILE_STORES["FileSessionStore<br/>FileMemoryStore (SQLite + FTS5)<br/>FileCronStore<br/>FilePairingStore<br/>FileSkillStore<br/>FileAgentStore (filesystem + SQLite)<br/>ProviderStore = nil<br/>TracingStore = nil<br/>MCPServerStore = nil<br/>CustomToolStore = nil<br/>AgentLinks = nil<br/>Teams = nil"]
 ```
 
 ---
@@ -30,11 +30,29 @@ The `Stores` struct is the top-level container holding all storage backends. In 
 | CronStore | `FileCronStore` | `PGCronStore` | Both |
 | PairingStore | `FilePairingStore` via `pairing.Service` | `PGPairingStore` | Both |
 | SkillStore | `FileSkillStore` via `skills.Loader` | `PGSkillStore` | Both |
-| AgentStore | `nil` | `PGAgentStore` | Managed only |
+| AgentStore | `FileAgentStore` (filesystem + SQLite) | `PGAgentStore` | Both |
 | ProviderStore | `nil` | `PGProviderStore` | Managed only |
 | TracingStore | `nil` | `PGTracingStore` | Managed only |
 | MCPServerStore | `nil` | `PGMCPServerStore` | Managed only |
 | CustomToolStore | `nil` | `PGCustomToolStore` | Managed only |
+| ChannelInstanceStore | `nil` | `PGChannelInstanceStore` | Managed only |
+| ConfigSecretsStore | `nil` | `PGConfigSecretsStore` | Managed only |
+| AgentLinkStore | `nil` | `PGAgentLinkStore` | Managed only |
+| TeamStore | `nil` | `PGTeamStore` | Managed only |
+
+### Standalone AgentStore (FileAgentStore)
+
+In standalone mode, `FileAgentStore` provides per-user context files and profiles without PostgreSQL. It combines filesystem storage (agent-level files like SOUL.md) with SQLite (`~/.goclaw/data/agents.db`) for per-user data:
+
+| Data | Storage |
+|------|---------|
+| Agent metadata | In-memory from `config.json` |
+| Agent-level files (SOUL.md, IDENTITY.md, ...) | Filesystem at workspace root |
+| Per-user files (USER.md, BOOTSTRAP.md) | SQLite `user_context_files` |
+| User profiles | SQLite `user_profiles` |
+| Group file writers | SQLite `group_file_writers` |
+
+Agent UUIDs use UUID v5 (deterministic): `uuid.NewSHA1(namespace, "goclaw-standalone:{agentKey}")` -- stable across restarts without database sequences.
 
 ---
 
@@ -246,7 +264,115 @@ Dynamic tool definitions stored in PostgreSQL. Each tool defines a shell command
 
 ---
 
-## 10. Database Schema
+## 10. Agent Link Store
+
+The agent link store manages inter-agent delegation permissions -- directed edges that control which agents can delegate to which others.
+
+### Table: `agent_links`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID v7 | Primary key |
+| `source_agent_id` | UUID | Agent that can delegate (FK → agents) |
+| `target_agent_id` | UUID | Agent being delegated to (FK → agents) |
+| `direction` | VARCHAR(20) | `outbound` (A→B only), `bidirectional` (A↔B) |
+| `team_id` | UUID | Non-nil = auto-created by team setup (FK → agent_teams, SET NULL on delete) |
+| `description` | TEXT | Link description |
+| `max_concurrent` | INT | Per-link concurrency cap (default 3) |
+| `settings` | JSONB | Per-user deny/allow lists for fine-grained access control |
+| `status` | VARCHAR(20) | `active` or `disabled` |
+| `created_by` | VARCHAR | Audit trail |
+
+**Constraints**: `UNIQUE(source_agent_id, target_agent_id)`, `CHECK (source_agent_id != target_agent_id)`
+
+### Agent Search Columns (migration 000002)
+
+The `agents` table gains three columns for agent discovery during delegation:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `frontmatter` | TEXT | Short expertise summary (distinct from `other_config.description` which is the summoning prompt) |
+| `tsv` | TSVECTOR | Auto-generated from `display_name + frontmatter`, GIN-indexed |
+| `embedding` | VECTOR(1536) | For cosine similarity search, HNSW-indexed |
+
+### AgentLinkStore Interface (12 methods)
+
+- **CRUD**: `CreateLink`, `DeleteLink`, `UpdateLink`, `GetLink`
+- **Queries**: `ListLinksFrom(agentID)`, `ListLinksTo(agentID)`
+- **Permission**: `CanDelegate(from, to)`, `GetLinkBetween(from, to)` (returns full link with Settings for per-user checks)
+- **Discovery**: `DelegateTargets(agentID)` (all targets with joined agent_key + display_name for DELEGATION.md), `SearchDelegateTargets` (FTS), `SearchDelegateTargetsByEmbedding` (vector cosine)
+
+### Table: `delegation_history`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | UUID v7 | Primary key |
+| `source_agent_id` | UUID | Delegating agent |
+| `target_agent_id` | UUID | Target agent |
+| `team_id` | UUID | Team context (nullable) |
+| `team_task_id` | UUID | Related team task (nullable) |
+| `user_id` | VARCHAR | User who triggered the delegation |
+| `task` | TEXT | Task description sent to target |
+| `mode` | VARCHAR(10) | `sync` or `async` |
+| `status` | VARCHAR(20) | `completed`, `failed`, `cancelled` |
+| `result` | TEXT | Target agent's response |
+| `error` | TEXT | Error message on failure |
+| `iterations` | INT | Number of LLM iterations |
+| `trace_id` | UUID | Linked trace for observability |
+| `duration_ms` | INT | Wall-clock duration |
+| `completed_at` | TIMESTAMPTZ | Completion timestamp |
+
+Every sync and async delegation is persisted here automatically via `SaveDelegationHistory()`. Results are truncated for WS transport (500 runes for list, 8000 runes for detail).
+
+---
+
+## 11. Team Store
+
+The team store manages collaborative multi-agent teams with a shared task board, peer-to-peer mailbox, and handoff routing.
+
+### Tables
+
+| Table | Purpose | Key Columns |
+|-------|---------|-------------|
+| `agent_teams` | Team definitions | `name`, `lead_agent_id` (FK → agents), `status`, `settings` (JSONB) |
+| `agent_team_members` | Team membership | PK `(team_id, agent_id)`, `role` (lead/member) |
+| `team_tasks` | Shared task board | `subject`, `status` (pending/in_progress/completed/blocked), `owner_agent_id`, `blocked_by` (UUID[]), `priority`, `result`, `tsv` (FTS) |
+| `team_messages` | Peer-to-peer mailbox | `from_agent_id`, `to_agent_id` (NULL = broadcast), `content`, `message_type` (chat/broadcast), `read` |
+| `handoff_routes` | Active routing overrides | UNIQUE `(channel, chat_id)`, `from_agent_key`, `to_agent_key`, `reason` |
+
+### TeamStore Interface (22 methods)
+
+**Team CRUD**: `CreateTeam`, `GetTeam`, `DeleteTeam`, `ListTeams`
+
+**Members**: `AddMember`, `RemoveMember`, `ListMembers`, `GetTeamForAgent` (find team by agent)
+
+**Tasks**: `CreateTask`, `UpdateTask`, `ListTasks` (orderBy: priority/newest, statusFilter: active/completed/all), `GetTask`, `SearchTasks` (FTS on subject+description), `ClaimTask`, `CompleteTask`
+
+**Delegation History**: `SaveDelegationHistory`, `ListDelegationHistory` (with filter opts), `GetDelegationHistory`
+
+**Handoff Routes**: `SetHandoffRoute`, `GetHandoffRoute`, `ClearHandoffRoute`
+
+**Messages**: `SendMessage`, `GetUnread`, `MarkRead`
+
+### Atomic Task Claiming
+
+Two agents grabbing the same task is prevented at the database level:
+
+```sql
+UPDATE team_tasks
+SET status = 'in_progress', owner_agent_id = $1
+WHERE id = $2 AND status = 'pending' AND owner_agent_id IS NULL
+```
+
+One row updated = claimed. Zero rows = someone else got it. Row-level locking, no distributed mutex needed.
+
+### Task Dependencies
+
+Tasks can declare `blocked_by` (UUID array) pointing to prerequisite tasks. When a task is completed via `CompleteTask`, all dependent tasks whose blockers are now all completed are automatically unblocked (status transitions from `blocked` to `pending`).
+
+---
+
+## 12. Database Schema
 
 All tables use UUID v7 (time-ordered) as primary keys via `GenNewID()`.
 
@@ -261,6 +387,21 @@ flowchart TD
         AG --> ACF["agent_context_files"]
         AG --> UCF["user_context_files"]
         AG --> UAP["user_agent_profiles"]
+    end
+
+    subgraph "Agent Links"
+        AG --> AL["agent_links"]
+        AL --> DH["delegation_history"]
+    end
+
+    subgraph Teams
+        AT["agent_teams"] --> ATM["agent_team_members"]
+        AT --> TT["team_tasks"]
+        AT --> TM["team_messages"]
+    end
+
+    subgraph Handoff
+        HR["handoff_routes"]
     end
 
     subgraph Sessions
@@ -304,21 +445,38 @@ flowchart TD
 
 | Table | Purpose | Key Columns |
 |-------|---------|-------------|
-| `agents` | Agent definitions | `agent_key` (UNIQUE), `owner_id`, `agent_type` (open/predefined), `is_default`, soft delete via `deleted_at` |
+| `agents` | Agent definitions | `agent_key` (UNIQUE), `owner_id`, `agent_type` (open/predefined), `is_default`, `frontmatter`, `tsv`, `embedding`, soft delete via `deleted_at` |
 | `agent_shares` | Agent RBAC sharing | UNIQUE(agent_id, user_id), `role` (user/admin/operator) |
 | `agent_context_files` | Agent-level context | UNIQUE(agent_id, file_name) |
 | `user_context_files` | Per-user context | UNIQUE(agent_id, user_id, file_name) |
 | `user_agent_profiles` | User tracking | `first_seen_at`, `last_seen_at`, `workspace` |
+| `agent_links` | Inter-agent delegation permissions | UNIQUE(source, target), `direction`, `max_concurrent`, `settings` (JSONB) |
+| `agent_teams` | Team definitions | `name`, `lead_agent_id`, `status`, `settings` (JSONB) |
+| `agent_team_members` | Team membership | PK(team_id, agent_id), `role` (lead/member) |
+| `team_tasks` | Shared task board | `subject`, `status`, `owner_agent_id`, `blocked_by` (UUID[]), `tsv` (FTS) |
+| `team_messages` | Peer-to-peer mailbox | `from_agent_id`, `to_agent_id`, `message_type`, `read` |
+| `delegation_history` | Persisted delegation records | `source_agent_id`, `target_agent_id`, `mode`, `status`, `result`, `trace_id` |
+| `handoff_routes` | Active routing overrides | UNIQUE(channel, chat_id), `from_agent_key`, `to_agent_key` |
 | `sessions` | Conversation history | `session_key` (UNIQUE), `messages` (JSONB), `summary`, token counts |
 | `memory_documents` | Memory docs | UNIQUE(agent_id, COALESCE(user_id, ''), path) |
 | `memory_chunks` | Chunked + embedded text | `embedding` (VECTOR), `tsv` (TSVECTOR) |
 | `llm_providers` | Provider configuration | `api_key` (AES-256-GCM encrypted) |
-| `traces` | LLM call traces | `agent_id`, `user_id`, `status`, aggregated token counts |
+| `traces` | LLM call traces | `agent_id`, `user_id`, `status`, `parent_trace_id`, aggregated token counts |
 | `spans` | Individual operations | `span_type` (llm_call, tool_call, agent, embedding), `parent_span_id` |
 | `skills` | Skill definitions | Content, metadata, grants |
 | `cron_jobs` | Scheduled tasks | `schedule_kind` (at/every/cron), `payload` (JSONB) |
 | `mcp_servers` | MCP server configs | `transport`, `api_key` (encrypted), `tool_prefix` |
 | `custom_tools` | Dynamic tool definitions | `command` (template), `agent_id` (NULL = global), `env` (encrypted) |
+
+### Migrations
+
+| Migration | Purpose |
+|-----------|---------|
+| `000001_init_schema` | Core tables (agents, sessions, providers, memory, cron, pairing, skills, traces, MCP, custom tools) |
+| `000002_agent_links` | `agent_links` table + `frontmatter`, `tsv`, `embedding` on agents + `parent_trace_id` on traces |
+| `000003_agent_teams` | `agent_teams`, `agent_team_members`, `team_tasks`, `team_messages` + `team_id` on agent_links |
+| `000004_teams_v2` | FTS on `team_tasks` (tsv column) + `delegation_history` table |
+| `000005_phase4` | `handoff_routes` table |
 
 ### Required PostgreSQL Extensions
 
@@ -327,7 +485,7 @@ flowchart TD
 
 ---
 
-## 11. Context Propagation
+## 13. Context Propagation
 
 Metadata flows through `context.Context` instead of mutable state, ensuring thread safety across concurrent agent runs.
 
@@ -345,6 +503,7 @@ flowchart TD
 | `goclaw_user_id` | string | External user ID (e.g., Telegram user ID) |
 | `goclaw_agent_id` | uuid.UUID | Agent UUID (managed mode) |
 | `goclaw_agent_type` | string | Agent type: `"open"` or `"predefined"` |
+| `goclaw_sender_id` | string | Original individual sender ID (in group chats, `user_id` is group-scoped but `sender_id` preserves the actual person) |
 
 ### Tool Context Keys
 
@@ -355,10 +514,11 @@ flowchart TD
 | `tool_peer_kind` | Peer type: `"direct"` or `"group"` |
 | `tool_sandbox_key` | Docker sandbox scope key |
 | `tool_async_cb` | Callback for async tool execution |
+| `tool_workspace` | Per-user workspace directory (injected by agent loop, read by filesystem/shell tools) |
 
 ---
 
-## 12. Key PostgreSQL Patterns
+## 14. Key PostgreSQL Patterns
 
 ### Database Driver
 
@@ -400,31 +560,41 @@ All "create or update" operations use `INSERT ... ON CONFLICT DO UPDATE`, ensuri
 
 | File | Purpose |
 |------|---------|
-| `internal/store/stores.go` | `Stores` container struct (all 9 store interfaces) |
+| `internal/store/stores.go` | `Stores` container struct (all 14 store interfaces) |
 | `internal/store/types.go` | `BaseModel`, `StoreConfig`, `GenNewID()` |
-| `internal/store/context.go` | Context propagation: `WithUserID`, `WithAgentID`, `WithAgentType` |
+| `internal/store/context.go` | Context propagation: `WithUserID`, `WithAgentID`, `WithAgentType`, `WithSenderID` |
 | `internal/store/session_store.go` | `SessionStore` interface, `SessionData`, `SessionInfo` |
 | `internal/store/memory_store.go` | `MemoryStore` interface, `MemorySearchResult`, `EmbeddingProvider` |
 | `internal/store/skill_store.go` | `SkillStore` interface |
 | `internal/store/agent_store.go` | `AgentStore` interface |
+| `internal/store/agent_link_store.go` | `AgentLinkStore` interface, `AgentLinkData`, link constants |
+| `internal/store/team_store.go` | `TeamStore` interface, `TeamData`, `TeamTaskData`, `DelegationHistoryData`, `HandoffRouteData`, `TeamMessageData` |
 | `internal/store/provider_store.go` | `ProviderStore` interface |
 | `internal/store/tracing_store.go` | `TracingStore` interface, `TraceData`, `SpanData` |
 | `internal/store/mcp_store.go` | `MCPServerStore` interface, grant types, access request types |
+| `internal/store/channel_instance_store.go` | `ChannelInstanceStore` interface |
+| `internal/store/config_secrets_store.go` | `ConfigSecretsStore` interface |
 | `internal/store/pairing_store.go` | `PairingStore` interface |
 | `internal/store/cron_store.go` | `CronStore` interface |
 | `internal/store/custom_tool_store.go` | `CustomToolStore` interface |
+| `internal/store/file/agents.go` | `FileAgentStore`: filesystem + SQLite backend for standalone mode |
 | `internal/store/pg/factory.go` | PG store factory: creates all PG store instances from a connection pool |
 | `internal/store/pg/sessions.go` | `PGSessionStore`: session cache, Save, GetOrCreate |
 | `internal/store/pg/agents.go` | `PGAgentStore`: CRUD, soft delete, access control |
 | `internal/store/pg/agents_context.go` | Agent and user context file operations |
+| `internal/store/pg/agent_links.go` | `PGAgentLinkStore`: link CRUD, permissions, FTS + vector search |
+| `internal/store/pg/teams.go` | `PGTeamStore`: teams, tasks (atomic claim), messages, delegation history, handoff routes |
 | `internal/store/pg/memory_docs.go` | `PGMemoryStore`: document CRUD, indexing, chunking |
 | `internal/store/pg/memory_search.go` | Hybrid search: FTS, vector, ILIKE fallback, merge |
 | `internal/store/pg/skills.go` | `PGSkillStore`: skill CRUD and grants |
 | `internal/store/pg/skills_grants.go` | Skill agent and user grants |
 | `internal/store/pg/mcp_servers.go` | `PGMCPServerStore`: server CRUD, grants, access requests |
+| `internal/store/pg/channel_instances.go` | `PGChannelInstanceStore`: channel instance CRUD |
+| `internal/store/pg/config_secrets.go` | `PGConfigSecretsStore`: encrypted config secrets |
 | `internal/store/pg/custom_tools.go` | `PGCustomToolStore`: custom tool CRUD with encrypted env |
 | `internal/store/pg/providers.go` | `PGProviderStore`: provider CRUD with encrypted keys |
 | `internal/store/pg/tracing.go` | `PGTracingStore`: traces and spans with batch insert |
 | `internal/store/pg/pool.go` | Connection pool management |
 | `internal/store/pg/helpers.go` | Nullable helpers, JSON helpers, `execMapUpdate()` |
 | `internal/store/validate.go` | Input validation utilities |
+| `internal/tools/context_keys.go` | Tool context keys including `WithToolWorkspace` |

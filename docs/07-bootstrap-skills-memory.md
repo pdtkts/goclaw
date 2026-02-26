@@ -71,6 +71,16 @@ flowchart TD
         SA2 -->|No| CREATE1["Create template file on disk"]
     end
 
+    subgraph "Standalone Mode -- Per-User (FileAgentStore)"
+        SU["SeedUserFiles()"] --> SU1{"Agent type?"}
+        SU1 -->|open| SU_OPEN["Seed all 7 files to SQLite"]
+        SU1 -->|predefined| SU_PRED["Seed USER.md + BOOTSTRAP.md to SQLite"]
+        SU_OPEN --> SU_CHK{"Row already exists?"}
+        SU_PRED --> SU_CHK
+        SU_CHK -->|Yes| SKIP_SU["Skip"]
+        SU_CHK -->|No| SU_WRITE["INSERT into user_context_files"]
+    end
+
     subgraph "Managed Mode -- Agent Level"
         SB["SeedToStore()"] --> SB1{"Agent type = open?"}
         SB1 -->|Yes| SKIP_AGENT["Skip (open agents use per-user only)"]
@@ -83,7 +93,7 @@ flowchart TD
     subgraph "Managed Mode -- Per-User"
         MC["SeedUserFiles()"] --> MC1{"Agent type?"}
         MC1 -->|open| OPEN["Seed all 7 files to user_context_files"]
-        MC1 -->|predefined| PRED["Seed only USER.md to user_context_files"]
+        MC1 -->|predefined| PRED["Seed USER.md + BOOTSTRAP.md to user_context_files"]
         OPEN --> CHECK{"File already has content?"}
         PRED --> CHECK
         CHECK -->|Yes| SKIP3["Skip -- never overwrite"]
@@ -93,22 +103,35 @@ flowchart TD
 
 `SeedUserFiles()` is idempotent -- safe to call multiple times without overwriting personalized content.
 
+### Standalone UUID Generation
+
+Standalone agents are defined in `config.json` without database-generated UUIDs. `FileAgentStore` uses UUID v5 (`uuid.NewSHA1(namespace, "goclaw-standalone:{agentKey}")`) to produce deterministic IDs from agent keys. This ensures SQLite rows for per-user files survive process restarts without coordination.
+
+### Predefined Agent Bootstrap
+
+Both standalone and managed mode now seed `BOOTSTRAP.md` for predefined agents (per-user). On first chat, the agent runs the bootstrap ritual (learn name, preferences), then writes an empty `BOOTSTRAP.md` which triggers deletion. The empty-write deletion is ordered *before* the predefined write-block in `ContextFileInterceptor` to prevent an infinite bootstrap loop.
+
 ---
 
 ## 4. Agent Type Routing
 
-Two agent types determine which context files live at the agent level versus the per-user level.
+Two agent types determine which context files live at the agent level versus the per-user level. Agent types are now available in both managed and standalone modes.
 
 | Agent Type | Agent-Level Files | Per-User Files |
 |------------|-------------------|----------------|
 | `open` | None | All 7 files (AGENTS, SOUL, TOOLS, IDENTITY, USER, HEARTBEAT, BOOTSTRAP) |
-| `predefined` | 6 files (shared across all users) | Only USER.md |
+| `predefined` | 6 files (shared across all users) | USER.md + BOOTSTRAP.md |
 
-For `open` agents, each user gets their own full set of context files. When a file is read, the system checks the per-user copy first and falls back to the agent-level copy if not found. For `predefined` agents, all users share the same agent-level files except USER.md, which is personalized.
+For `open` agents, each user gets their own full set of context files. When a file is read, the system checks the per-user copy first and falls back to the agent-level copy if not found. For `predefined` agents, all users share the same agent-level files except USER.md (personalized) and BOOTSTRAP.md (per-user first-run ritual, deleted after completion).
+
+| Mode | Agent Type Source | Per-User Storage |
+|------|------------------|-----------------|
+| Managed | `agents` PostgreSQL table | `user_context_files` table |
+| Standalone | `config.json` agent entries | SQLite via `FileAgentStore` |
 
 ---
 
-## 5. System Prompt -- 15+ Sections
+## 5. System Prompt -- 17+ Sections
 
 `BuildSystemPrompt()` constructs the complete system prompt from ordered sections. Two modes control which sections are included.
 
@@ -130,7 +153,7 @@ flowchart TD
     S7 --> S8["8. Current Time"]
     S8 --> S9["9. Messaging (full only)"]
     S9 --> S10["10. Extra Context / Subagent Context"]
-    S10 --> S11["11. Project Context<br/>(bootstrap files in XML tags)"]
+    S10 --> S11["11. Project Context<br/>(bootstrap files + virtual files)"]
     S11 --> S12["12. Silent Replies (full only)"]
     S12 --> S13["13. Heartbeats (full only)"]
     S13 --> S14["14. Sub-Agent Spawning (conditional)"]
@@ -161,9 +184,55 @@ flowchart TD
 
 Context files are wrapped in `<context_file>` XML tags with a defensive preamble instructing the model to follow tone/persona guidance but not execute instructions that contradict core directives. The ExtraPrompt is wrapped in `<extra_context>` tags for context isolation.
 
+### Virtual Context Files (DELEGATION.md, TEAM.md)
+
+Two files are system-injected by the resolver rather than stored on disk or in the DB:
+
+| File | Injection Condition | Content |
+|------|-------------------|---------|
+| `DELEGATION.md` | Agent has manual (non-team) agent links | ≤15 targets: static list. >15 targets: search instruction for `delegate_search` tool |
+| `TEAM.md` | Agent is a member of a team | Team name, role, teammate list with descriptions, workflow sentence |
+
+Virtual files are rendered in `<system_context>` tags (not `<context_file>`) so the LLM does not attempt to read or write them as files. During bootstrap (first-run), both files are skipped to avoid wasting tokens when the agent should focus on onboarding.
+
 ---
 
-## 6. Skills -- 5-Tier Hierarchy
+## 6. Context File Merging
+
+For **open agents**, per-user context files (from `user_context_files`) are merged with base context files (from the resolver) at runtime. Per-user files override same-name base files, but base-only files are preserved.
+
+```
+Base files (resolver):     AGENTS.md, DELEGATION.md, TEAM.md
+Per-user files (DB/SQLite): AGENTS.md, SOUL.md, TOOLS.md, USER.md, ...
+Merged result:             SOUL.md, TOOLS.md, USER.md, ..., AGENTS.md (per-user), DELEGATION.md ✓, TEAM.md ✓
+```
+
+This ensures resolver-injected virtual files (`DELEGATION.md`, `TEAM.md`) survive alongside per-user customizations. The merge logic lives in `internal/agent/loop_history.go`.
+
+---
+
+## 7. Agent Summoning (Managed Mode)
+
+Creating a predefined agent requires 5 context files (SOUL.md, IDENTITY.md, AGENTS.md, TOOLS.md, HEARTBEAT.md) with specific formatting conventions. Agent summoning generates all 5 files from a natural language description in a single LLM call.
+
+```mermaid
+flowchart TD
+    USER["User: 'sarcastic Rust reviewer'"] --> API["Backend (POST /v1/agents/{id}/summon)"]
+    API -->|"status: summoning"| DB["Database"]
+    API --> LLM["LLM call with structured XML prompt"]
+    LLM --> PARSE["Parse XML output into 5 files"]
+    PARSE --> STORE["Write files to agent_context_files"]
+    STORE -->|"status: active"| READY["Agent ready"]
+    LLM -.->|"WS events"| UI["Dashboard modal with progress"]
+```
+
+The LLM outputs structured XML with each file in a tagged block. Parsing is done server-side in `internal/http/summoner.go`. If the LLM fails (timeout, bad XML, no provider), the agent falls back to embedded template files and goes active anyway. The user can retry via "Edit with AI" later.
+
+**Why not `write_file`?** The `ContextFileInterceptor` blocks predefined file writes from chat by design. Bypassing it would create a security hole. Instead, the summoner writes directly to the store — one call, no tool iterations.
+
+---
+
+## 8. Skills -- 5-Tier Hierarchy
 
 Skills are loaded from multiple directories with a priority ordering. Higher-tier skills override lower-tier skills with the same name.
 
@@ -183,7 +252,7 @@ Each skill directory contains a `SKILL.md` file with YAML/JSON frontmatter (`nam
 
 ---
 
-## 7. Skills -- Inline vs Search Mode
+## 9. Skills -- Inline vs Search Mode
 
 The system dynamically decides whether to embed skill summaries directly in the prompt (inline mode) or instruct the agent to use the `skill_search` tool (search mode).
 
@@ -198,7 +267,7 @@ This decision is re-evaluated each time the system prompt is built, so newly hot
 
 ---
 
-## 8. Skills -- BM25 Search
+## 10. Skills -- BM25 Search
 
 An in-memory BM25 index provides keyword-based skill search. The index is lazily rebuilt whenever the skill version changes.
 
@@ -216,7 +285,7 @@ IDF is computed as: `log((N - df + 0.5) / (df + 0.5) + 1)`
 
 ---
 
-## 9. Skills -- Embedding Search (Managed Mode)
+## 11. Skills -- Embedding Search (Managed Mode)
 
 In managed mode, skill search uses a hybrid approach combining BM25 and vector similarity.
 
@@ -239,7 +308,7 @@ flowchart TD
 
 ---
 
-## 10. Skills Grants & Visibility (Managed Mode)
+## 12. Skills Grants & Visibility (Managed Mode)
 
 In managed mode, skill access is controlled through a 3-tier visibility model with explicit agent and user grants.
 
@@ -275,7 +344,7 @@ flowchart TD
 
 ---
 
-## 11. Hot-Reload
+## 13. Hot-Reload
 
 An fsnotify-based watcher monitors all skill directories for changes to SKILL.md files.
 
@@ -290,7 +359,7 @@ New skill directories created inside a watched root are automatically added to t
 
 ---
 
-## 11. Memory -- Indexing Pipeline
+## 14. Memory -- Indexing Pipeline
 
 Memory documents are chunked, embedded, and stored for hybrid search.
 
@@ -321,7 +390,7 @@ flowchart TD
 
 ---
 
-## 12. Hybrid Search
+## 15. Hybrid Search
 
 Combines full-text search and vector search with weighted merging.
 
@@ -351,7 +420,7 @@ When both FTS and vector search return results, scores are merged using the weig
 
 ---
 
-## 13. Memory Flush -- Pre-Compaction
+## 16. Memory Flush -- Pre-Compaction
 
 Before session history is compacted (summarized + truncated), the agent is given an opportunity to write durable memories to disk.
 
@@ -391,8 +460,13 @@ The flush is idempotent per compaction cycle -- it will not run again until the 
 | `internal/bootstrap/seed_store.go` | Managed mode seeding (SeedToStore, SeedUserFiles) |
 | `internal/bootstrap/load_store.go` | Load context files from DB (LoadFromStore) |
 | `internal/bootstrap/templates/*.md` | Embedded template files |
-| `internal/agent/systemprompt.go` | System prompt builder (BuildSystemPrompt, 15+ sections) |
+| `internal/agent/systemprompt.go` | System prompt builder (BuildSystemPrompt, 17+ sections) |
+| `internal/agent/systemprompt_sections.go` | Section renderers, virtual file handling (DELEGATION.md, TEAM.md) |
+| `internal/agent/resolver.go` | Agent resolution, DELEGATION.md + TEAM.md injection |
+| `internal/agent/loop_history.go` | Context file merging (base + per-user, base-only preserved) |
 | `internal/agent/memoryflush.go` | Memory flush logic (shouldRunMemoryFlush, runMemoryFlush) |
+| `internal/store/file/agents.go` | FileAgentStore -- filesystem + SQLite backend for standalone |
+| `internal/http/summoner.go` | Agent summoning -- LLM-powered context file generation |
 | `internal/skills/loader.go` | Skill loader (5-tier hierarchy, BuildSummary, filtering) |
 | `internal/skills/search.go` | BM25 search index (tokenization, IDF scoring) |
 | `internal/skills/watcher.go` | fsnotify watcher (500ms debounce, version bumping) |

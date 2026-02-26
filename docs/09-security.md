@@ -14,7 +14,7 @@ flowchart TD
     L1 --> L2["Layer 2: Input<br/>Injection detection (6 patterns), message truncation"]
     L2 --> L3["Layer 3: Tool<br/>Shell deny patterns, path traversal, SSRF, exec approval"]
     L3 --> L4["Layer 4: Output<br/>Credential scrubbing, content wrapping"]
-    L4 --> L5["Layer 5: Isolation<br/>Docker sandbox, read-only root FS, network restrictions"]
+    L4 --> L5["Layer 5: Isolation<br/>Workspace isolation, Docker sandbox, read-only FS"]
 ```
 
 ### Layer 1: Transport Security
@@ -77,6 +77,16 @@ flowchart TD
 
 **Path traversal**: `resolvePath()` applies `filepath.Clean()` then `HasPrefix()` to ensure all paths stay within the workspace. With `restrict = true`, any path outside the workspace is blocked.
 
+**PathDenyable** -- An interface that lets filesystem tools reject specific path prefixes:
+
+```go
+type PathDenyable interface {
+    DenyPaths(...string)
+}
+```
+
+All four filesystem tools (`read_file`, `write_file`, `list_files`, `edit`) implement `PathDenyable`. The agent loop calls `DenyPaths(".goclaw")` at startup to prevent agents from accessing internal data directories. `list_files` additionally filters denied directories from output entirely -- the agent does not see denied paths in directory listings.
+
 ### Layer 4: Output Security
 
 | Mechanism | Detail |
@@ -84,7 +94,18 @@ flowchart TD
 | Credential scrubbing | Regex detection of: OpenAI (`sk-...`), Anthropic (`sk-ant-...`), GitHub (`ghp_/gho_/ghu_/ghs_/ghr_`), AWS (`AKIA...`), generic key-value patterns. All replaced with `[REDACTED]`. |
 | Web content wrapping | Fetched content wrapped in `<<<EXTERNAL_UNTRUSTED_CONTENT>>>` tags with security warning |
 
-### Layer 5: Isolation (Docker Sandbox)
+### Layer 5: Isolation
+
+**Per-user workspace isolation** -- Two levels prevent cross-user file access:
+
+| Level | Scope | Directory Pattern |
+|-------|-------|------------------|
+| Per-agent | Each agent gets its own base directory | `~/.goclaw/{agent-key}-workspace/` |
+| Per-user | Each user gets a subdirectory within the agent workspace | `{agent-workspace}/user_{sanitized_id}/` |
+
+The workspace is injected into tools via `WithToolWorkspace(ctx)` context injection. Tools read the workspace from context at execution time (fallback to the struct field for backward compatibility). User IDs are sanitized: anything outside `[a-zA-Z0-9_-]` becomes an underscore (`group:telegram:-1001234` → `group_telegram_-1001234`).
+
+**Docker sandbox** -- Container-based isolation for shell command execution:
 
 | Hardening | Configuration |
 |-----------|---------------|
@@ -255,6 +276,37 @@ Filter all security events by grepping for the `security.` prefix in log output.
 
 ---
 
+## 7. Hook Recursion Prevention
+
+The hook system (quality gates) can trigger infinite recursion: an agent evaluator delegates to a reviewer → delegation completes → fires quality gate → delegates to reviewer again → infinite loop.
+
+A context flag `hooks.WithSkipHooks(ctx, true)` prevents this. Three injection points set the flag:
+
+| Injection Point | Why |
+|----------------|-----|
+| Agent evaluator | Delegating to the reviewer for quality checks must not re-trigger gates |
+| Evaluate-optimize loop | All internal generator/evaluator delegations skip gates |
+| Agent eval callback (cmd layer) | When the hook engine itself triggers delegation |
+
+`DelegateManager.Delegate()` checks `hooks.SkipHooksFromContext(ctx)` before applying quality gates. If the flag is set, gates are skipped entirely.
+
+---
+
+## 8. Delegation Security
+
+Agent delegation uses directed permissions via the `agent_links` table.
+
+| Control | Scope | Description |
+|---------|-------|-------------|
+| Directed links | A → B | A single row `(A→B, outbound)` means A can delegate to B, not the reverse |
+| Per-user deny/allow | Per-link | `settings` JSONB on each link holds per-user restrictions (premium users only, blocked accounts) |
+| Per-link concurrency | A → B | `agent_links.max_concurrent` limits simultaneous delegations from A to B |
+| Per-agent load cap | B (all sources) | `other_config.max_delegation_load` limits total concurrent delegations targeting B |
+
+When concurrency limits are hit, the error message is written for LLM reasoning: *"Agent at capacity (5/5). Try a different agent or handle it yourself."*
+
+---
+
 ## File Reference
 
 | File | Description |
@@ -267,6 +319,11 @@ Filter all security events by grepping for the `security.` prefix in log output.
 | `internal/gateway/ratelimit.go` | Gateway-level token bucket rate limiter |
 | `internal/sandbox/` | Docker sandbox manager, FsBridge |
 | `internal/crypto/aes.go` | AES-256-GCM encrypt/decrypt |
+| `internal/tools/types.go` | PathDenyable interface definition |
+| `internal/tools/filesystem.go` | Denied path checking (`checkDeniedPath` helper) |
+| `internal/tools/filesystem_list.go` | Denied path support + directory filtering |
+| `internal/hooks/context.go` | WithSkipHooks / SkipHooksFromContext (recursion prevention) |
+| `internal/hooks/engine.go` | Hook engine, evaluator registry |
 
 ---
 
@@ -274,8 +331,9 @@ Filter all security events by grepping for the `security.` prefix in log output.
 
 | Document | Relevant Content |
 |----------|-----------------|
-| [03-tools-system.md](./03-tools-system.md) | Shell deny patterns, exec approval, policy engine |
+| [03-tools-system.md](./03-tools-system.md) | Shell deny patterns, exec approval, PathDenyable, delegation system, quality gates |
 | [04-gateway-protocol.md](./04-gateway-protocol.md) | WebSocket auth, RBAC, rate limiting |
-| [06-store-data-model.md](./06-store-data-model.md) | API key encryption, agent access control pipeline |
+| [06-store-data-model.md](./06-store-data-model.md) | API key encryption, agent access control pipeline, agent_links table |
+| [07-bootstrap-skills-memory.md](./07-bootstrap-skills-memory.md) | Context file merging, virtual files |
 | [08-scheduling-cron-heartbeat.md](./08-scheduling-cron-heartbeat.md) | Scheduler lanes, cron lifecycle |
 | [10-tracing-observability.md](./10-tracing-observability.md) | Tracing and OTel export |

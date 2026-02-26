@@ -51,6 +51,32 @@ flowchart LR
 
 Internal channels (`cli`, `system`, `subagent`) are silently skipped by the outbound dispatcher and never forwarded to external platforms.
 
+### Handoff Routing (Managed Mode)
+
+Before normal agent routing, the consumer checks the `handoff_routes` table for an active routing override. If a handoff route exists for the incoming channel + chat ID, the message is redirected to the target agent instead of the original agent.
+
+```mermaid
+flowchart TD
+    MSG["Inbound message"] --> CHECK{"handoff_routes<br/>has override?"}
+    CHECK -->|Yes| TARGET["Route to target agent<br/>(billing, support, etc.)"]
+    CHECK -->|No| NORMAL["Route to default agent"]
+    TARGET --> SESSION["New session for target agent"]
+    NORMAL --> SESSION2["Existing session"]
+```
+
+Handoff routes are created by the `handoff` tool (see [03-tools-system.md](./03-tools-system.md)) and can be cleared by the target agent calling `handoff(action="clear")` or by handing back to the original agent.
+
+### Message Routing Prefixes
+
+The consumer routes system messages based on sender ID prefixes:
+
+| Prefix | Route | Outbound Delivery |
+|--------|-------|:-:|
+| `subagent:` | Parent session queue | Yes |
+| `delegate:` | Delegate scheduler lane | Yes |
+| `teammate:` | Lead agent session queue | Yes |
+| `handoff:` | Target agent via delegate lane | Yes |
+
 ### Managed Mode Behavior
 
 In managed mode, channels provide per-user isolation through compound sender IDs and context propagation:
@@ -155,6 +181,8 @@ The Telegram channel uses long polling via the `telego` library (Telegram Bot AP
 - **Group mention gating**: By default, bot must be @mentioned in groups (`requireMention: true`). Pending group messages without a mention are stored in a history buffer (default 50 messages) and included as context when the bot is eventually mentioned.
 - **Typing indicator**: A "typing" action is sent while the agent is processing.
 - **Proxy support**: Optional HTTP proxy configured via the channel config.
+- **Cancel commands**: `/stop` (cancel oldest running task) and `/stopall` (cancel all + drain queue). Both are intercepted before the 800ms debouncer to avoid being merged with subsequent messages. See [08-scheduling-cron-heartbeat.md](./08-scheduling-cron-heartbeat.md) for details.
+- **Concurrent group support**: Group sessions support up to 3 concurrent agent runs, allowing multiple users to get responses in parallel.
 
 ### Formatting Pipeline
 
@@ -290,6 +318,7 @@ sequenceDiagram
 | `internal/channels/channel.go` | Channel interface, BaseChannel, DMPolicy/GroupPolicy types, HandleMessage |
 | `internal/channels/manager.go` | Manager: channel registration, StartAll, StopAll, outbound dispatch |
 | `internal/channels/telegram/telegram.go` | Telegram channel: long polling, mention gating, typing indicators |
+| `internal/channels/telegram/commands.go` | /stop, /stopall command handlers, menu registration |
 | `internal/channels/telegram/format.go` | Markdown-to-Telegram-HTML pipeline, table rendering, CJK width |
 | `internal/channels/telegram/format_test.go` | Tests for Telegram formatting pipeline |
 | `internal/channels/feishu/feishu.go` | Feishu/Lark channel: WS/Webhook modes, card messages |
@@ -302,3 +331,4 @@ sequenceDiagram
 | `internal/channels/whatsapp/whatsapp.go` | WhatsApp channel: external WS bridge |
 | `internal/channels/zalo/zalo.go` | Zalo channel: OA Bot API, long polling, DM only |
 | `internal/pairing/service.go` | Pairing service: code generation, approval, persistence |
+| `cmd/gateway_consumer.go` | Message consumer: routing prefixes, handoff check, cancel interception |

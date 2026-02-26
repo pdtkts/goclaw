@@ -28,6 +28,12 @@ flowchart LR
     ES --> FT["FinishTrace()<br/>(status, error, output preview)"]
 ```
 
+### Cancel Handling
+
+When a run is cancelled via `/stop` or `/stopall`, the run context is cancelled but trace finalization still needs to persist. `FinishTrace()` detects `ctx.Err() != nil` and switches to `context.Background()` for the final database write. The trace status is set to `"cancelled"` instead of `"error"`.
+
+Context values (traceID, collector) survive cancellation -- only `ctx.Done()` and `ctx.Err()` change. This allows trace finalization to find everything it needs with a fresh context for the DB call.
+
 ---
 
 ## 2. Span Types & Hierarchy
@@ -110,10 +116,24 @@ The exporter lives in a separate sub-package (`internal/tracing/otelexport/`) so
 |-----------|------|-------------|
 | `agent_id` | UUID | Filter by agent |
 | `user_id` | string | Filter by user |
-| `status` | string | Filter by status (running, success, error) |
+| `status` | string | Filter by status (running, success, error, cancelled) |
 | `from` / `to` | timestamp | Date range filter |
 | `limit` | int | Page size (default 50) |
 | `offset` | int | Pagination offset |
+
+---
+
+## 6. Delegation History (Managed Mode)
+
+Delegation history records are stored in the `delegation_history` table and exposed alongside traces for cross-referencing agent interactions.
+
+| Channel | Endpoint | Details |
+|---------|----------|---------|
+| WebSocket RPC | `delegations.list` / `delegations.get` | Results truncated (500 runes for list, 8000 for detail) |
+| HTTP API | `GET /v1/delegations` / `GET /v1/delegations/{id}` | Full records |
+| Agent tool | `delegate(action="history")` | Agent self-checking past delegations |
+
+Delegation history is automatically recorded by `DelegateManager.saveDelegationHistory()` for every delegation (sync/async). Each record includes source agent, target agent, input, result, duration, and status.
 
 ---
 
@@ -128,6 +148,8 @@ The exporter lives in a separate sub-package (`internal/tracing/otelexport/`) so
 | `internal/store/pg/tracing.go` | PostgreSQL trace/span persistence + aggregation |
 | `internal/http/traces.go` | Trace HTTP API handler (GET /v1/traces) |
 | `internal/agent/loop_tracing.go` | Span emission from agent loop (LLM, tool, agent spans) |
+| `internal/http/delegations.go` | Delegation history HTTP API handler |
+| `internal/gateway/methods/delegations.go` | Delegation history RPC handlers |
 
 ---
 
@@ -135,6 +157,8 @@ The exporter lives in a separate sub-package (`internal/tracing/otelexport/`) so
 
 | Document | Relevant Content |
 |----------|-----------------|
-| [01-agent-loop.md](./01-agent-loop.md) | Span emission during agent execution |
-| [06-store-data-model.md](./06-store-data-model.md) | traces/spans tables schema |
+| [01-agent-loop.md](./01-agent-loop.md) | Span emission during agent execution, cancel handling |
+| [03-tools-system.md](./03-tools-system.md) | Delegation system, delegation history via agent tool |
+| [06-store-data-model.md](./06-store-data-model.md) | traces/spans tables schema, delegation_history table |
+| [08-scheduling-cron-heartbeat.md](./08-scheduling-cron-heartbeat.md) | /stop and /stopall commands |
 | [09-security.md](./09-security.md) | Rate limiting, RBAC access control |

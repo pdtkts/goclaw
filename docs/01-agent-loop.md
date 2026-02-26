@@ -15,10 +15,11 @@ flowchart TD
     START([RunRequest]) --> PH1
 
     subgraph PH1["Phase 1: Setup"]
-        P1A[Lock mutex - one run at a time] --> P1B[Emit run.started event]
+        P1A[Increment activeRuns atomic counter] --> P1B[Emit run.started event]
         P1B --> P1C[Create trace record]
         P1C --> P1D[Inject agentType / userID / agentID into context]
-        P1D --> P1E[Ensure per-user files via sync.Map cache]
+        P1D --> P1E0[Compute per-user workspace + WithToolWorkspace]
+        P1E0 --> P1E[Ensure per-user files via sync.Map cache]
         P1E --> P1F[Persist agent + user IDs on session]
     end
 
@@ -34,7 +35,7 @@ flowchart TD
         P3A[Build system prompt - 15+ sections] --> P3B[Inject conversation summary if present]
         P3B --> P3C["History pipeline: limitHistoryTurns --> pruneContextMessages --> sanitizeHistory"]
         P3C --> P3D[Append current user message]
-        P3D --> P3E[Save user message to session]
+        P3D --> P3E[Buffer user message locally - deferred write]
     end
 
     PH3 --> PH4
@@ -60,7 +61,7 @@ flowchart TD
 
     subgraph PH6["Phase 6: Response Finalization"]
         P6A["SanitizeAssistantContent (7-step pipeline)"] --> P6B["Detect NO_REPLY - suppress delivery if silent"]
-        P6B --> P6C[Save assistant message to session]
+        P6B --> P6C[Flush all buffered messages atomically to session]
         P6C --> P6D[Update metadata: model, provider, token counts]
     end
 
@@ -85,10 +86,11 @@ flowchart TD
 
 ### Phase 1: Setup
 
-- Lock a mutex so only one run executes per Loop at a time.
+- Increment the `activeRuns` atomic counter (no mutex -- true concurrency, especially in group chats with `maxConcurrent = 3`).
 - Emit a `run.started` event to notify connected clients.
 - Create a trace record (managed mode) with a generated trace UUID.
 - Propagate context values: `WithAgentID()`, `WithUserID()`, `WithAgentType()`. Downstream tools and interceptors rely on these.
+- Compute per-user workspace: `base + "/" + sanitize(userID)`. Inject via `WithToolWorkspace(ctx)` so all filesystem and shell tools use the correct directory.
 - Ensure per-user files exist. A `sync.Map` cache guarantees the seeding function runs at most once per user.
 - Persist the agent ID and user ID on the session for later reference.
 
@@ -102,7 +104,7 @@ flowchart TD
 - Build the system prompt (15+ sections). Context files are resolved dynamically based on agent type.
 - Inject the conversation summary (if one exists from a previous compaction) as the first two messages.
 - Run the history pipeline (3 stages, see Section 5).
-- Append the current user message and save it to the session store.
+- Append the current user message. Messages are buffered locally (deferred write) to avoid race conditions with concurrent runs on the same session.
 
 ### Phase 4: LLM Iteration Loop
 
@@ -126,14 +128,22 @@ flowchart TD
 
 - Run `SanitizeAssistantContent` -- a 7-step cleanup pipeline (see Section 3).
 - Detect `NO_REPLY` in the final content. If present, suppress message delivery (silent reply).
-- Save the final assistant message to the session.
+- Flush all buffered messages atomically to the session (user message, tool messages, assistant message). This prevents concurrent runs from interleaving partial history.
 - Update session metadata: model name, provider name, cumulative token counts.
 
 ### Phase 7: Auto-Summarization
 
 - **Trigger condition**: the history has more than 50 messages OR the estimated token count exceeds 75% of the context window.
+- **Per-session TryLock**: before summarizing, acquire a non-blocking per-session lock. If another concurrent run is already summarizing, skip. This prevents concurrent summarization from corrupting session history.
 - **Memory flush first**: run synchronously so the agent can persist durable memories before history is truncated. Max 5 LLM iterations, 90-second timeout.
 - **Summarize**: launch a background goroutine with a 120-second timeout. The LLM produces a summary of all messages except the last 4. The summary is saved and the history is truncated to those 4 messages. The compaction counter is incremented.
+
+### Cancel Handling
+
+When the context is cancelled (via `/stop` or `/stopall`), the loop exits immediately:
+- Trace finalization uses `context.Background()` fallback when `ctx.Err() != nil` to ensure the final DB write succeeds.
+- Trace status is set to `"cancelled"` instead of `"error"`.
+- An empty outbound message triggers cleanup (stop typing indicator, clear reactions).
 
 ---
 
@@ -163,7 +173,9 @@ The system prompt is assembled dynamically from 15+ sections. Two modes control 
 15. **Silent Replies** -- instructions for the NO_REPLY convention.
 16. **Heartbeats** -- instructions for periodic wake-up behavior.
 17. **Sub-Agent Spawning** -- rules for launching child agents.
-18. **Runtime** -- runtime metadata (agent ID, session key, provider info).
+18. **Delegation** -- auto-generated `DELEGATION.md` listing available delegation targets (inline if ≤15, search instruction if >15).
+19. **Team** -- `TEAM.md` injected for team leads only (team name, role, teammate list).
+20. **Runtime** -- runtime metadata (agent ID, session key, provider info).
 
 ---
 
@@ -410,6 +422,7 @@ The Loop publishes events via an `onEvent` callback. The WebSocket gateway forwa
 | `tool.result` | Tool execution completes | `{"name": "...", "id": "...", "is_error": bool}` |
 | `run.completed` | Run finishes successfully | -- |
 | `run.failed` | Run finishes with an error | `{"error": "..."}` |
+| `handoff` | Conversation transferred to another agent | `{"from": "...", "to": "...", "reason": "..."}` |
 
 ### Event Flow
 

@@ -110,6 +110,22 @@ Context keys ensure each tool call receives the correct per-call values without 
 |------|-------------|
 | `message` | Send a message to a channel |
 
+### Delegation (group: `delegation`)
+
+| Tool | Description |
+|------|-------------|
+| `delegate` | Delegate task to another agent (actions: delegate, cancel, list, history) |
+| `delegate_search` | Hybrid FTS + semantic agent discovery for delegation targets |
+| `evaluate_loop` | Generate-evaluate-revise cycle with two agents (max 5 rounds) |
+| `handoff` | Transfer conversation to another agent (routing override) |
+
+### Teams (group: `teams`)
+
+| Tool | Description |
+|------|-------------|
+| `team_tasks` | Task board: list, create, claim, complete, search |
+| `team_message` | Mailbox: send, broadcast, read unread messages |
+
 ### Other Tools
 
 | Tool | Description |
@@ -167,6 +183,22 @@ flowchart TD
 ### MemoryInterceptor
 
 Routes `MEMORY.md`, `memory.md`, and `memory/*` paths. Per-user results take priority with a fallback to global scope. Writing a `.md` file automatically triggers `IndexDocument()` (chunking + embedding).
+
+### PathDenyable Interface
+
+Tools that access the filesystem implement the `PathDenyable` interface, allowing specific path prefixes to be denied at runtime:
+
+```go
+type PathDenyable interface {
+    DenyPaths(...string)
+}
+```
+
+All four filesystem tools (`read_file`, `write_file`, `list_files`, `edit_file`) implement it. `list_files` additionally filters denied directories from its output entirely -- the agent doesn't even know the directory exists. Used to prevent agents from accessing `.goclaw` directories within workspaces.
+
+### Workspace Context Injection
+
+Filesystem and shell tools read their workspace from `ToolWorkspaceFromCtx(ctx)`, which is injected by the agent loop based on the current user and agent. This enables per-user workspace isolation without changing any tool code. Falls back to the struct field for backward compatibility.
 
 ### Path Security
 
@@ -258,6 +290,8 @@ flowchart TD
 | `ui` | `browser`, `canvas` |
 | `automation` | `cron`, `gateway` |
 | `messaging` | `message` |
+| `delegation` | `delegate`, `delegate_search`, `evaluate_loop`, `handoff` |
+| `teams` | `team_tasks`, `team_message` |
 | `goclaw` | All native tools (composite group) |
 
 Groups can be referenced in allow/deny lists with the `group:` prefix (e.g., `group:fs`). The MCP manager dynamically registers `mcp` and `mcp:{serverName}` groups at runtime.
@@ -316,7 +350,204 @@ Results are announced back to the parent agent via the message bus, optionally b
 
 ---
 
-## 7. MCP Bridge Tools
+## 7. Delegation System
+
+Delegation allows named agents to delegate tasks to other fully independent agents (each with its own identity, tools, provider, model, and context files). Unlike subagents (anonymous clones), delegation crosses agent boundaries via explicit permission links.
+
+### DelegateManager
+
+The `DelegateManager` in `internal/tools/delegate.go` orchestrates all delegation operations:
+
+| Action | Mode | Behavior |
+|--------|------|----------|
+| `delegate` | `sync` | Caller waits for result (quick lookups, fact checks) |
+| `delegate` | `async` | Caller moves on; result announced later via message bus (`delegate:{id}`) |
+| `cancel` | -- | Cancel a running async delegation by ID |
+| `list` | -- | List active delegations |
+| `history` | -- | Query past delegations from `delegation_history` table |
+
+### Callback Pattern
+
+The `tools` package cannot import `agent` (import cycle). A callback function bridges the gap:
+
+```go
+type AgentRunFunc func(ctx context.Context, agentKey string, req DelegateRunRequest) (*DelegateRunResult, error)
+```
+
+The `cmd` layer provides the implementation at wiring time. The `tools` package never knows `agent` exists.
+
+### Agent Links (Permission Control)
+
+Delegation requires an explicit link in the `agent_links` table. Links are directed edges:
+
+- **outbound** (A→B): Only A can delegate to B
+- **bidirectional** (A↔B): Both can delegate to each other
+
+Each link has `max_concurrent` and per-user `settings` (JSONB) for deny/allow lists.
+
+### Concurrency Control
+
+Two layers prevent overload:
+
+| Layer | Config | Scope |
+|-------|--------|-------|
+| Per-link | `agent_links.max_concurrent` | A→B specifically |
+| Per-agent | `other_config.max_delegation_load` | B from all sources |
+
+When limits hit, the error message is written for LLM reasoning: *"Agent at capacity (5/5). Try a different agent or handle it yourself."*
+
+### DELEGATION.md Auto-Injection
+
+During agent resolution, `DELEGATION.md` is auto-generated and injected into the system prompt:
+
+- **≤15 targets**: Full inline list with agent keys, names, and frontmatter
+- **>15 targets**: Search instruction pointing to the `delegate_search` tool (hybrid FTS + pgvector cosine)
+
+### Context File Merging (Open Agents)
+
+For open agents, per-user context files merge with resolver-injected base files. Per-user files override same-name base files, but base-only files like `DELEGATION.md` are preserved:
+
+```
+Base files (resolver):     DELEGATION.md
+Per-user files (DB):       AGENTS.md, SOUL.md, TOOLS.md, USER.md, ...
+Merged result:             AGENTS.md, SOUL.md, TOOLS.md, USER.md, ..., DELEGATION.md ✓
+```
+
+---
+
+## 8. Agent Teams
+
+Teams add a shared coordination layer on top of delegation: a task board for parallel work and a mailbox for peer-to-peer communication.
+
+### Architecture
+
+An admin creates a team via the dashboard, assigns a **lead** and **members**. When a user messages the lead:
+1. The lead sees `TEAM.md` in its system prompt (teammate list + role)
+2. The lead posts tasks to the board
+3. Teammates are activated, claim tasks, and work in parallel
+4. Teammates message each other for coordination
+5. The lead synthesizes results and replies to the user
+
+### Task Board (`team_tasks` tool)
+
+| Action | Description |
+|--------|-------------|
+| `list` | List tasks (filter: active/completed/all, order: priority/newest) |
+| `create` | Create task with subject, description, priority, blocked_by |
+| `claim` | Atomically claim a pending task (race-safe via row-level lock) |
+| `complete` | Mark task done with result; auto-unblocks dependent tasks |
+| `search` | FTS search over task subject + description |
+
+### Mailbox (`team_message` tool)
+
+| Action | Description |
+|--------|-------------|
+| `send` | Send direct message to a specific teammate |
+| `broadcast` | Send message to all teammates |
+| `read` | Read unread messages |
+
+### Lead-Centric Design
+
+Only the lead gets `TEAM.md` in its system prompt. Teammates discover context on demand through tools -- no wasted tokens on idle agents. When a teammate message arrives, the message itself carries context (e.g., *"[Team message from lead]: please claim a task from the board."*).
+
+### Message Routing
+
+Teammate results route through the message bus with a `"teammate:"` prefix. The consumer publishes the outbound response so the lead (and ultimately the user) sees the result.
+
+---
+
+## 9. Evaluate-Optimize Loop
+
+A structured revision cycle between two agents: a generator and an evaluator.
+
+```mermaid
+sequenceDiagram
+    participant L as Calling Agent
+    participant G as Generator
+    participant V as Evaluator
+
+    L->>G: "Write product announcement"
+    G->>L: Draft v1
+    L->>V: "Evaluate against criteria"
+    V->>L: "REJECTED: Too long, missing pricing"
+    L->>G: "Revise. Feedback: too long, missing pricing"
+    G->>L: Draft v2
+    L->>V: "Evaluate revised version"
+    V->>L: "APPROVED"
+    L->>L: Return v2 as final output
+```
+
+The `evaluate_loop` tool orchestrates this. Parameters: generator agent, evaluator agent, pass criteria, and max rounds (default 3, cap 5). Each round is a pair of sync delegations. If the evaluator responds with "APPROVED" (case-insensitive prefix match), the loop exits. If "REJECTED: feedback", the generator gets another shot.
+
+Internal delegations use `WithSkipHooks(ctx)` to prevent quality gates from triggering recursion.
+
+---
+
+## 10. Agent Handoff
+
+Handoff transfers a conversation from one agent to another. Unlike delegation (which keeps the source agent in the loop), handoff removes it entirely.
+
+| | Delegation | Handoff |
+|---|---|---|
+| Who talks to the user? | Source agent (always) | Target agent (after transfer) |
+| Source agent involvement | Waits for result, reformulates | Steps away completely |
+| Session | Target runs in source's context | Target gets a new session |
+| Duration | One task | Until cleared or handed back |
+
+### Mechanism
+
+When agent A calls `handoff(agent="billing", reason="billing question")`:
+1. A row is written to `handoff_routes`: this channel + chat ID now routes to billing
+2. A `handoff` event is broadcast (WS clients can react)
+3. An initial message is published to billing via the message bus with conversation context
+
+Subsequent messages from the user on that channel are routed to billing (consumer checks `handoff_routes` before normal routing). Billing can hand back via `handoff(action="clear")`.
+
+---
+
+## 11. Quality Gates (Hook System)
+
+A general-purpose hook system for validating agent output before it reaches the user. Located in `internal/hooks/`.
+
+### Evaluator Types
+
+| Type | How it works | Example |
+|------|-------------|---------|
+| **command** | Run a shell command. Exit 0 = pass. Stderr = feedback. | `npm test`, `eslint --stdin` |
+| **agent** | Delegate to a reviewer agent. Parse "APPROVED" or "REJECTED: feedback". | QA reviewer checks tone/accuracy |
+
+### Configuration
+
+Quality gates live in the source agent's `other_config` JSON:
+
+```json
+{
+  "quality_gates": [
+    {
+      "event": "delegation.completed",
+      "type": "agent",
+      "agent": "qa-reviewer",
+      "block_on_failure": true,
+      "max_retries": 2
+    }
+  ]
+}
+```
+
+When `block_on_failure` is true and retries remain, the system re-runs the target agent with the evaluator's feedback injected as a revision prompt.
+
+### Recursion Prevention
+
+Quality gates with agent evaluators can cause infinite recursion (gate delegates to reviewer → reviewer completes → gate fires again). The fix is a context flag: `hooks.WithSkipHooks(ctx, true)`. Three places set it:
+1. **Agent evaluator** -- when delegating to the reviewer
+2. **Evaluate loop** -- for all internal generator/evaluator delegations
+3. **Agent eval callback in cmd layer** -- when the hook engine itself triggers delegation
+
+`DelegateManager.Delegate()` checks `hooks.SkipHooksFromContext(ctx)` before applying gates. If set, gates are skipped.
+
+---
+
+## 12. MCP Bridge Tools
 
 GoClaw integrates with Model Context Protocol (MCP) servers via `internal/mcp/`. The MCP Manager connects to external tool servers and registers their tools in the tool registry with a configurable prefix.
 
@@ -367,7 +598,7 @@ flowchart LR
 
 ---
 
-## 8. Custom Tools (Managed Mode)
+## 13. Custom Tools (Managed Mode)
 
 Define shell-based tools at runtime via the HTTP API -- no recompile or restart needed. Custom tools are stored in the `custom_tools` PostgreSQL table and loaded dynamically into the agent's tool registry.
 
@@ -427,7 +658,7 @@ flowchart TD
 
 ---
 
-## 8. Credential Scrubbing
+## 14. Credential Scrubbing
 
 Tool output is automatically scrubbed before being returned to the LLM. Enabled by default in the registry.
 
@@ -445,7 +676,7 @@ All matches are replaced with `[REDACTED]`.
 
 ---
 
-## 9. Rate Limiter
+## 15. Rate Limiter
 
 The tool registry supports per-session rate limiting via `ToolRateLimiter`. When configured, each `ExecuteWithContext` call checks `rateLimiter.Allow(sessionKey)` before tool execution. Rate-limited calls receive an error result without executing the tool.
 
@@ -464,6 +695,18 @@ The tool registry supports per-session rate limiting via `ToolRateLimiter`. When
 | `internal/tools/shell.go` | ExecTool: deny patterns, approval workflow, sandbox routing |
 | `internal/tools/scrub.go` | ScrubCredentials: credential pattern matching and redaction |
 | `internal/tools/subagent.go` | SubagentManager: spawn, cancel, steer, run sync, deny lists |
+| `internal/tools/delegate.go` | DelegateManager: sync, async, cancel, concurrency, per-user checks |
+| `internal/tools/delegate_tool.go` | Delegate tool wrapper (action: delegate/cancel/list/history) |
+| `internal/tools/delegate_search_tool.go` | Hybrid FTS + semantic agent discovery |
+| `internal/tools/evaluate_loop_tool.go` | Generate-evaluate-revise loop (max 5 rounds) |
+| `internal/tools/handoff_tool.go` | Conversation transfer (routing override + context carry) |
+| `internal/tools/team_tool_manager.go` | Shared backend for team tools |
+| `internal/tools/team_tasks_tool.go` | Task board: list, create, claim, complete, search |
+| `internal/tools/team_message_tool.go` | Mailbox: send, broadcast, read |
+| `internal/hooks/engine.go` | Hook engine: evaluator registry, EvaluateHooks |
+| `internal/hooks/command_evaluator.go` | Shell command evaluator |
+| `internal/hooks/agent_evaluator.go` | Agent delegation evaluator |
+| `internal/hooks/context.go` | WithSkipHooks / SkipHooksFromContext |
 | `internal/tools/context_file_interceptor.go` | ContextFileInterceptor: 7-file routing by agent type |
 | `internal/tools/memory_interceptor.go` | MemoryInterceptor: MEMORY.md and memory/* routing |
 | `internal/tools/skill_search.go` | Skill search tool (BM25) |
