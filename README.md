@@ -344,11 +344,16 @@ Quality gates validate agent output before it reaches users. Configured in agent
 
 ## Quick Start
 
+```bash
+git clone https://github.com/nextlevelbuilder/goclaw.git
+cd goclaw
+```
+
 ### From Source
 
 ```bash
 # Build
-go build -o goclaw .
+make build
 
 # Interactive setup wizard
 ./goclaw onboard
