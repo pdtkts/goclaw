@@ -35,6 +35,7 @@ const (
 	AgentEventRunStarted   = "run.started"
 	AgentEventRunCompleted = "run.completed"
 	AgentEventRunFailed    = "run.failed"
+	AgentEventRunRetrying  = "run.retrying"
 	AgentEventToolCall     = "tool.call"
 	AgentEventToolResult   = "tool.result"
 )

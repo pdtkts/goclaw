@@ -88,6 +88,16 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 		return fmt.Errorf("empty chat ID for discord send")
 	}
 
+	// Placeholder update (e.g. LLM retry notification): edit the placeholder
+	// but keep it alive for the final response. Don't stop typing or cleanup.
+	if msg.Metadata["placeholder_update"] == "true" {
+		if pID, ok := c.placeholders.Load(channelID); ok {
+			msgID := pID.(string)
+			_, _ = c.session.ChannelMessageEdit(channelID, msgID, msg.Content)
+		}
+		return nil
+	}
+
 	// Stop typing indicator controller
 	if ctrl, ok := c.typingCtrls.LoadAndDelete(channelID); ok {
 		ctrl.(*typing.Controller).Stop()

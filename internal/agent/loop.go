@@ -480,6 +480,20 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	var asyncToolCalls []string  // track async spawn tool names for fallback
 	var mediaResults []MediaResult // media files from tool MEDIA: results
 
+	// Inject retry hook so channels can update placeholder on LLM retries.
+	ctx = providers.WithRetryHook(ctx, func(attempt, maxAttempts int, err error) {
+		l.emit(AgentEvent{
+			Type:    protocol.AgentEventRunRetrying,
+			AgentID: l.id,
+			RunID:   req.RunID,
+			Payload: map[string]string{
+				"attempt":     fmt.Sprintf("%d", attempt),
+				"maxAttempts": fmt.Sprintf("%d", maxAttempts),
+				"error":       err.Error(),
+			},
+		})
+	})
+
 	for iteration < l.maxIterations {
 		iteration++
 

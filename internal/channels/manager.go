@@ -321,6 +321,21 @@ func (m *Manager) HandleAgentEvent(eventType, runID string, payload interface{})
 		}
 	}
 
+	// Handle LLM retry: update placeholder to notify user
+	if eventType == protocol.AgentEventRunRetrying {
+		attempt := extractPayloadString(payload, "attempt")
+		maxAttempts := extractPayloadString(payload, "maxAttempts")
+		retryMsg := fmt.Sprintf("Provider busy, retrying... (%s/%s)", attempt, maxAttempts)
+		m.bus.PublishOutbound(bus.OutboundMessage{
+			Channel: rc.ChannelName,
+			ChatID:  rc.ChatID,
+			Content: retryMsg,
+			Metadata: map[string]string{
+				"placeholder_update": "true",
+			},
+		})
+	}
+
 	// Forward to ReactionChannel
 	if reactionCh, ok := ch.(ReactionChannel); ok {
 		status := ""

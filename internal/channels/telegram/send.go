@@ -50,6 +50,15 @@ func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 		fmt.Sscanf(v, "%d", &threadID)
 	}
 
+	// Placeholder update (e.g. LLM retry notification): edit the placeholder
+	// but keep it alive for the final response. Don't stop typing or cleanup.
+	if msg.Metadata["placeholder_update"] == "true" {
+		if pID, ok := c.placeholders.Load(localKey); ok {
+			_ = c.editMessage(ctx, chatID, pID.(int), msg.Content)
+		}
+		return nil
+	}
+
 	// Stop thinking animation
 	if stop, ok := c.stopThinking.Load(localKey); ok {
 		if cf, ok := stop.(*thinkingCancel); ok {
