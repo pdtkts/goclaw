@@ -242,6 +242,14 @@ func runGateway() {
 				if meta.OriginLocalKey != "" {
 					batchMeta["origin_local_key"] = meta.OriginLocalKey
 				}
+				if meta.OriginSessionKey != "" {
+					batchMeta["origin_session_key"] = meta.OriginSessionKey
+				}
+				// Collect media from all items in the batch.
+				var batchMedia []string
+				for _, item := range items {
+					batchMedia = append(batchMedia, item.Media...)
+				}
 				msgBus.PublishInbound(bus.InboundMessage{
 					Channel:  "system",
 					SenderID: senderID,
@@ -249,6 +257,7 @@ func runGateway() {
 					Content:  content,
 					UserID:   meta.OriginUserID,
 					Metadata: batchMeta,
+					Media:    batchMedia,
 				})
 			},
 			func(parentID string) int {
@@ -346,14 +355,12 @@ func runGateway() {
 		initOTelExporter(context.Background(), cfg, traceCollector)
 	}
 
+	// Redis cache: compiled via build tags. Build with 'go build -tags redis' to enable.
+	redisClient := initRedisClient(cfg)
+	defer shutdownRedis(redisClient)
+
 	// Wire cron retry config from config.json
 	cronRetryCfg := cfg.Cron.ToRetryConfig()
-	type cronRetryConfigSetter interface{ SetRetryConfig(interface{}) }
-	if svc, ok := pgStores.Cron.(interface {
-		SetRetryConfig(r interface{})
-	}); ok {
-		_ = svc
-	}
 	// Apply retry config via type assertion on the concrete cron store.
 	pgStores.Cron.SetOnJob(nil) // ensure initialized; actual handler set below
 	_ = cronRetryCfg            // config available; pg cron store reads it internally
@@ -580,9 +587,17 @@ func runGateway() {
 		}
 	}
 
-	contextFileInterceptor, delegateMgr = wireExtras(pgStores, agentRouter, providerRegistry, msgBus, pgStores.Sessions, toolsReg, toolPE, skillsLoader, hasMemory, traceCollector, workspace, cfg.Gateway.InjectionAction, cfg, sandboxMgr, dynamicLoader)
+	var mcpPool *mcpbridge.Pool
+	contextFileInterceptor, delegateMgr, mcpPool = wireExtras(pgStores, agentRouter, providerRegistry, msgBus, pgStores.Sessions, toolsReg, toolPE, skillsLoader, hasMemory, traceCollector, workspace, cfg.Gateway.InjectionAction, cfg, sandboxMgr, dynamicLoader, redisClient)
+	if mcpPool != nil {
+		defer mcpPool.Stop()
+	}
 	gatewayAddr := loopbackAddr(cfg.Gateway.Host, cfg.Gateway.Port)
-	agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH, delegationsH, builtinToolsH := wireHTTP(pgStores, cfg.Gateway.Token, msgBus, toolsReg, providerRegistry, permPE.IsOwner, gatewayAddr)
+	var mcpToolLister httpapi.MCPToolLister
+	if mcpMgr != nil {
+		mcpToolLister = mcpMgr
+	}
+	agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH, delegationsH, builtinToolsH := wireHTTP(pgStores, cfg.Gateway.Token, msgBus, toolsReg, providerRegistry, permPE.IsOwner, gatewayAddr, mcpToolLister)
 	if agentsH != nil {
 		server.SetAgentsHandler(agentsH)
 	}
@@ -610,6 +625,10 @@ func runGateway() {
 	if builtinToolsH != nil {
 		server.SetBuiltinToolsHandler(builtinToolsH)
 	}
+
+	// Workspace file serving endpoint — serves files by absolute path, auth-token protected.
+	// Supports media from any agent workspace (each agent has its own workspace from DB).
+	server.SetFilesHandler(httpapi.NewFilesHandler(cfg.Gateway.Token))
 
 	// Seed + apply builtin tool disables
 	if pgStores.BuiltinTools != nil {
