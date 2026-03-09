@@ -23,7 +23,8 @@ type SystemPromptConfig struct {
 	AgentID       string
 	Model         string
 	Workspace     string
-	Channel       string                 // runtime channel (telegram, discord, etc.)
+	Channel       string                 // runtime channel instance name (e.g. "my-telegram-bot")
+	ChannelType   string                 // platform type (e.g. "zalo_personal", "telegram")
 	PeerKind      string                 // "direct" or "group"
 	OwnerIDs      []string               // owner sender IDs
 	Mode          PromptMode             // full or minimal
@@ -84,13 +85,17 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 	isMinimal := cfg.Mode == PromptMinimal
 	var lines []string
 
-	// 1. Identity — channel-aware context
-	if cfg.Channel != "" {
+	// 1. Identity — channel-aware context (use ChannelType for clarity, fallback to Channel)
+	channelLabel := cfg.ChannelType
+	if channelLabel == "" {
+		channelLabel = cfg.Channel
+	}
+	if channelLabel != "" {
 		chatType := "a direct chat"
 		if cfg.PeerKind == "group" {
 			chatType = "a group chat"
 		}
-		lines = append(lines, fmt.Sprintf("You are a personal assistant running in %s (%s).", cfg.Channel, chatType))
+		lines = append(lines, fmt.Sprintf("You are a personal assistant running in %s (%s).", channelLabel, chatType))
 		lines = append(lines, "")
 	}
 
@@ -153,6 +158,11 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 	// 9. ## Messaging (full only)
 	if !isMinimal {
 		lines = append(lines, buildMessagingSection()...)
+	}
+
+	// 9.5. Channel formatting hints (e.g. Zalo → plain text)
+	if hint := buildChannelFormattingHint(cfg.ChannelType); hint != nil {
+		lines = append(lines, hint...)
 	}
 
 	// 10. Extra system prompt (wrapped in tags for context isolation)

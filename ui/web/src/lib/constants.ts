@@ -10,6 +10,7 @@ export const ROUTES = {
   SKILLS: "/skills",
   SKILL_DETAIL: "/skills/:id",
   CRON: "/cron",
+  CRON_DETAIL: "/cron/:id",
   CONFIG: "/config",
   TRACES: "/traces",
   TRACE_DETAIL: "/traces/:id",
@@ -29,6 +30,7 @@ export const ROUTES = {
   MCP: "/mcp",
   TTS: "/tts",
   STORAGE: "/storage",
+  PENDING_MESSAGES: "/pending-messages",
   SETUP: "/setup",
 } as const;
 
