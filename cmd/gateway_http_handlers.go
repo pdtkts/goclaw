@@ -57,6 +57,9 @@ func wireHTTP(stores *store.Stores, token string, msgBus *bus.MessageBus, toolsR
 
 	if stores != nil && stores.Providers != nil {
 		providersH = httpapi.NewProvidersHandler(stores.Providers, stores.ConfigSecrets, token, providerReg, gatewayAddr)
+		if stores.MCP != nil {
+			providersH.SetMCPServerLookup(buildMCPServerLookup(stores.MCP))
+		}
 	}
 
 	if stores != nil && stores.Teams != nil {
@@ -68,7 +71,7 @@ func wireHTTP(stores *store.Stores, token string, msgBus *bus.MessageBus, toolsR
 	}
 
 	if stores != nil && stores.PendingMessages != nil {
-		pendingMessagesH = httpapi.NewPendingMessagesHandler(stores.PendingMessages, token)
+		pendingMessagesH = httpapi.NewPendingMessagesHandler(stores.PendingMessages, token, providerReg)
 	}
 
 	return agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH, delegationsH, builtinToolsH, pendingMessagesH

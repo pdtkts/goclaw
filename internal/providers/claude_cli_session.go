@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -26,7 +27,8 @@ func validateCLIModel(model string) error {
 }
 
 // buildArgs constructs CLI arguments.
-func (p *ClaudeCLIProvider) buildArgs(model, workDir string, cliSessionID uuid.UUID, outputFormat string, hasImages, disableTools bool) []string {
+// mcpConfigPath is the resolved per-session MCP config file (may differ per call).
+func (p *ClaudeCLIProvider) buildArgs(model, workDir, mcpConfigPath string, cliSessionID uuid.UUID, outputFormat string, hasImages, disableTools bool) []string {
 	args := []string{
 		"-p",
 		"--output-format", outputFormat,
@@ -35,8 +37,8 @@ func (p *ClaudeCLIProvider) buildArgs(model, workDir string, cliSessionID uuid.U
 		"--verbose",
 	}
 
-	if p.mcpConfigPath != "" {
-		args = append(args, "--mcp-config", p.mcpConfigPath)
+	if mcpConfigPath != "" {
+		args = append(args, "--mcp-config", mcpConfigPath)
 	}
 
 	// Session persistence: check if CLI session file exists on disk.
@@ -56,7 +58,7 @@ func (p *ClaudeCLIProvider) buildArgs(model, workDir string, cliSessionID uuid.U
 	if disableTools {
 		// Summoner: disable all tools entirely via disallowedTools
 		args = append(args, "--disallowedTools", "Bash,Edit,Read,Write,Glob,Grep,WebFetch,WebSearch,TodoRead,TodoWrite,NotebookRead,NotebookEdit")
-	} else if p.mcpConfigPath != "" {
+	} else if mcpConfigPath != "" {
 		// Chat with MCP bridge: disable CLI built-in tools, only allow MCP bridge tools.
 		// This ensures all tool execution goes through GoClaw's controlled MCP bridge.
 		args = append(args, "--disallowedTools", "Bash,Edit,Read,Write,Glob,Grep,WebFetch,WebSearch,TodoRead,TodoWrite,NotebookRead,NotebookEdit")
@@ -69,13 +71,22 @@ func (p *ClaudeCLIProvider) buildArgs(model, workDir string, cliSessionID uuid.U
 	return args
 }
 
+// resolveMCPConfigPath writes a per-session MCP config with agent context and returns its path.
+func (p *ClaudeCLIProvider) resolveMCPConfigPath(ctx context.Context, sessionKey string, bc BridgeContext) string {
+	if p.mcpConfigData == nil {
+		return ""
+	}
+	path := p.mcpConfigData.WriteMCPConfig(ctx, sessionKey, bc)
+	if path != "" {
+		p.mcpConfigDirs.Store(filepath.Dir(path), struct{}{})
+	}
+	return path
+}
+
 // ensureWorkDir creates and returns a stable work directory for the given session key.
 func (p *ClaudeCLIProvider) ensureWorkDir(sessionKey string) string {
-	if sessionKey == "" {
-		sessionKey = "default"
-	}
-	// Sanitize session key for filesystem
-	safe := strings.NewReplacer(":", "-", "/", "-", "\\", "-").Replace(sessionKey)
+	// Sanitize session key for filesystem safety (path traversal, null bytes, length)
+	safe := sanitizePathSegment(sessionKey)
 	dir := filepath.Join(p.baseWorkDir, safe)
 
 	p.mu.Lock()
@@ -119,12 +130,25 @@ func extractFromMessages(msgs []Message) (systemPrompt, userMsg string, images [
 	return
 }
 
-// extractDisableTools checks if disable_tools is set to true in Options.
-func extractDisableTools(opts map[string]interface{}) bool {
+// extractStringOpt gets a string value from Options map by key.
+func extractStringOpt(opts map[string]any, key string) string {
+	if opts == nil {
+		return ""
+	}
+	if v, ok := opts[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// extractBoolOpt gets a bool value from Options map by key.
+func extractBoolOpt(opts map[string]any, key string) bool {
 	if opts == nil {
 		return false
 	}
-	if v, ok := opts[OptDisableTools]; ok {
+	if v, ok := opts[key]; ok {
 		if b, ok := v.(bool); ok {
 			return b
 		}
@@ -132,17 +156,15 @@ func extractDisableTools(opts map[string]interface{}) bool {
 	return false
 }
 
-// extractSessionKey gets session_key from Options map.
-func extractSessionKey(opts map[string]interface{}) string {
-	if opts == nil {
-		return ""
+// bridgeContextFromOpts builds a BridgeContext from the Options map.
+func bridgeContextFromOpts(opts map[string]any) BridgeContext {
+	return BridgeContext{
+		AgentID:  extractStringOpt(opts, OptAgentID),
+		UserID:   extractStringOpt(opts, OptUserID),
+		Channel:  extractStringOpt(opts, OptChannel),
+		ChatID:   extractStringOpt(opts, OptChatID),
+		PeerKind: extractStringOpt(opts, OptPeerKind),
 	}
-	if v, ok := opts[OptSessionKey]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
 }
 
 // defaultCLIWorkDir returns ~/.goclaw/cli-workspaces, falling back to temp dir.
@@ -187,12 +209,12 @@ func sessionFileExists(workDir string, sessionID uuid.UUID) bool {
 
 // buildStreamJSONInput creates stream-json stdin for vision (images + text).
 func buildStreamJSONInput(text string, images []ImageContent) *bytes.Reader {
-	var contentBlocks []map[string]interface{}
+	var contentBlocks []map[string]any
 
 	for _, img := range images {
-		contentBlocks = append(contentBlocks, map[string]interface{}{
+		contentBlocks = append(contentBlocks, map[string]any{
 			"type": "image",
-			"source": map[string]interface{}{
+			"source": map[string]any{
 				"type":       "base64",
 				"media_type": img.MimeType,
 				"data":       img.Data,
@@ -201,15 +223,15 @@ func buildStreamJSONInput(text string, images []ImageContent) *bytes.Reader {
 	}
 
 	if text != "" {
-		contentBlocks = append(contentBlocks, map[string]interface{}{
+		contentBlocks = append(contentBlocks, map[string]any{
 			"type": "text",
 			"text": text,
 		})
 	}
 
-	msg := map[string]interface{}{
+	msg := map[string]any{
 		"type": "user",
-		"message": map[string]interface{}{
+		"message": map[string]any{
 			"role":    "user",
 			"content": contentBlocks,
 		},
@@ -224,8 +246,8 @@ func filterCLIEnv(environ []string) []string {
 	var filtered []string
 	for _, e := range environ {
 		key := e
-		if idx := strings.IndexByte(e, '='); idx >= 0 {
-			key = e[:idx]
+		if before, _, ok := strings.Cut(e, "="); ok {
+			key = before
 		}
 		// Filter out variables that could cause nested CLI conflicts
 		if strings.HasPrefix(key, "CLAUDE") {

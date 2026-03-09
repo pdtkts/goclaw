@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/oauth"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
@@ -15,17 +16,24 @@ import (
 
 // ProvidersHandler handles LLM provider CRUD endpoints.
 type ProvidersHandler struct {
-	store       store.ProviderStore
-	secretStore store.ConfigSecretsStore
-	token       string
-	providerReg *providers.Registry
-	gatewayAddr string     // for injecting MCP bridge into Claude CLI providers
-	cliMu       sync.Mutex // serializes Claude CLI provider create to prevent duplicates
+	store          store.ProviderStore
+	secretStore    store.ConfigSecretsStore
+	token          string
+	providerReg    *providers.Registry
+	gatewayAddr    string                   // for injecting MCP bridge into Claude CLI providers
+	mcpLookup      providers.MCPServerLookup // optional: resolves per-agent MCP servers
+	cliMu          sync.Mutex               // serializes Claude CLI provider create to prevent duplicates
 }
 
 // NewProvidersHandler creates a handler for provider management endpoints.
 func NewProvidersHandler(s store.ProviderStore, secretStore store.ConfigSecretsStore, token string, providerReg *providers.Registry, gatewayAddr string) *ProvidersHandler {
 	return &ProvidersHandler{store: s, secretStore: secretStore, token: token, providerReg: providerReg, gatewayAddr: gatewayAddr}
+}
+
+// SetMCPServerLookup sets the per-agent MCP server lookup for Claude CLI providers.
+// Must be called before serving requests (not thread-safe).
+func (h *ProvidersHandler) SetMCPServerLookup(lookup providers.MCPServerLookup) {
+	h.mcpLookup = lookup
 }
 
 // RegisterRoutes registers all provider management routes on the given mux.
@@ -51,7 +59,8 @@ func (h *ProvidersHandler) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if h.token != "" {
 			if extractBearerToken(r) != h.token {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+				locale := extractLocale(r)
+				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": i18n.T(locale, i18n.MsgUnauthorized)})
 				return
 			}
 		}
@@ -81,12 +90,9 @@ func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) {
 		var cliOpts []providers.ClaudeCLIOption
 		cliOpts = append(cliOpts, providers.WithClaudeCLISecurityHooks("", true))
 		if h.gatewayAddr != "" {
-			mcpPath, mcpCleanup, mcpErr := providers.BuildCLIMCPConfig(nil, h.gatewayAddr, h.token)
-			if mcpErr != nil {
-				slog.Warn("failed to build MCP config for in-memory claude-cli", "error", mcpErr)
-			} else if mcpPath != "" {
-				cliOpts = append(cliOpts, providers.WithClaudeCLIMCPConfig(mcpPath, mcpCleanup))
-			}
+			mcpData := providers.BuildCLIMCPConfigData(nil, h.gatewayAddr, h.token)
+			mcpData.AgentMCPLookup = h.mcpLookup
+			cliOpts = append(cliOpts, providers.WithClaudeCLIMCPConfigData(mcpData))
 		}
 		h.providerReg.Register(providers.NewClaudeCLIProvider(cliPath, cliOpts...))
 		return
@@ -124,7 +130,8 @@ func (h *ProvidersHandler) handleListProviders(w http.ResponseWriter, r *http.Re
 	providers, err := h.store.ListProviders(r.Context())
 	if err != nil {
 		slog.Error("providers.list", "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list providers"})
+		locale := extractLocale(r)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": i18n.T(locale, i18n.MsgFailedToList, "providers")})
 		return
 	}
 
@@ -136,22 +143,23 @@ func (h *ProvidersHandler) handleListProviders(w http.ResponseWriter, r *http.Re
 }
 
 func (h *ProvidersHandler) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
+	locale := extractLocale(r)
 	var p store.LLMProviderData
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&p); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidJSON)})
 		return
 	}
 
 	if p.Name == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name is required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgRequired, "name")})
 		return
 	}
 	if !isValidSlug(p.Name) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name must be a valid slug (lowercase letters, numbers, hyphens only)"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidSlug, "name")})
 		return
 	}
 	if !store.ValidProviderTypes[p.ProviderType] {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported provider_type"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidRequest, "unsupported provider_type")})
 		return
 	}
 
@@ -165,7 +173,7 @@ func (h *ProvidersHandler) handleCreateProvider(w http.ResponseWriter, r *http.R
 		for _, ep := range existing {
 			if ep.ProviderType == store.ProviderClaudeCLI {
 				writeJSON(w, http.StatusConflict, map[string]string{
-					"error": "A Claude CLI provider already exists. Only one is allowed per instance.",
+					"error": i18n.T(locale, i18n.MsgAlreadyExists, "Claude CLI provider", "only one is allowed per instance"),
 				})
 				return
 			}
@@ -186,15 +194,16 @@ func (h *ProvidersHandler) handleCreateProvider(w http.ResponseWriter, r *http.R
 }
 
 func (h *ProvidersHandler) handleGetProvider(w http.ResponseWriter, r *http.Request) {
+	locale := extractLocale(r)
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid provider ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "provider")})
 		return
 	}
 
 	p, err := h.store.GetProvider(r.Context(), id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": i18n.T(locale, i18n.MsgNotFound, "provider", id.String())})
 		return
 	}
 
@@ -203,30 +212,34 @@ func (h *ProvidersHandler) handleGetProvider(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *ProvidersHandler) handleUpdateProvider(w http.ResponseWriter, r *http.Request) {
+	locale := extractLocale(r)
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid provider ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "provider")})
 		return
 	}
 
 	var updates map[string]interface{}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&updates); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidJSON)})
 		return
 	}
 
 	// Validate name if being updated
 	if name, ok := updates["name"]; ok {
 		if s, _ := name.(string); !isValidSlug(s) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name must be a valid slug"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidSlug, "name")})
 			return
 		}
 	}
 
-	// Validate provider_type if being updated
+	// Validate provider_type if being updated.
+	// IMPORTANT: Do NOT replace this with delete(updates, "provider_type").
+	// We must return 400 so the caller knows the value is invalid,
+	// silently deleting it would hide the error from the end user.
 	if pt, ok := updates["provider_type"]; ok {
 		if s, _ := pt.(string); !store.ValidProviderTypes[s] {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported provider_type"})
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidRequest, "unsupported provider_type")})
 			return
 		}
 	}
@@ -242,6 +255,14 @@ func (h *ProvidersHandler) handleUpdateProvider(w http.ResponseWriter, r *http.R
 	delete(updates, "id")
 	delete(updates, "created_at")
 
+	// Track old name before update for registry cleanup
+	var oldName string
+	if h.providerReg != nil {
+		if old, err := h.store.GetProvider(r.Context(), id); err == nil {
+			oldName = old.Name
+		}
+	}
+
 	if err := h.store.UpdateProvider(r.Context(), id, updates); err != nil {
 		slog.Error("providers.update", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -251,6 +272,10 @@ func (h *ProvidersHandler) handleUpdateProvider(w http.ResponseWriter, r *http.R
 	// Sync in-memory registry with updated provider
 	if h.providerReg != nil {
 		if updated, err := h.store.GetProvider(r.Context(), id); err == nil {
+			// Unregister old name if renamed to prevent ghost entries
+			if oldName != "" && oldName != updated.Name {
+				h.providerReg.Unregister(oldName)
+			}
 			if !updated.Enabled {
 				h.providerReg.Unregister(updated.Name)
 			} else {
@@ -263,9 +288,10 @@ func (h *ProvidersHandler) handleUpdateProvider(w http.ResponseWriter, r *http.R
 }
 
 func (h *ProvidersHandler) handleDeleteProvider(w http.ResponseWriter, r *http.Request) {
+	locale := extractLocale(r)
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid provider ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "provider")})
 		return
 	}
 

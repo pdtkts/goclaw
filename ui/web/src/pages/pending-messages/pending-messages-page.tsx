@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { Inbox, RefreshCw, Trash2, Archive } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { Inbox, RefreshCw, Trash2, Archive, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/shared/page-header";
@@ -13,6 +14,8 @@ import { MessageListDialog } from "./message-list-dialog";
 import type { PendingMessageGroup } from "./types";
 
 export function PendingMessagesPage() {
+  const { t } = useTranslation("pending-messages");
+  const { t: tc } = useTranslation("common");
   const {
     groups,
     messages,
@@ -29,6 +32,7 @@ export function PendingMessagesPage() {
   const [selectedGroup, setSelectedGroup] = useState<PendingMessageGroup | null>(null);
   const [confirmClear, setConfirmClear] = useState<PendingMessageGroup | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [compactingKey, setCompactingKey] = useState<string | null>(null);
 
   useEffect(() => {
     loadGroups();
@@ -40,7 +44,9 @@ export function PendingMessagesPage() {
     e.stopPropagation();
     const key = `${group.channel_name}/${group.history_key}`;
     setActionLoading(key);
+    setCompactingKey(key);
     await compactGroup(group.channel_name, group.history_key);
+    setCompactingKey(null);
     setActionLoading(null);
     loadGroups();
   };
@@ -57,11 +63,11 @@ export function PendingMessagesPage() {
   return (
     <div className="p-4 sm:p-6">
       <PageHeader
-        title="Pending Messages"
-        description="Buffered channel messages awaiting agent processing"
+        title={t("title")}
+        description={t("description")}
         actions={
           <Button variant="outline" size="sm" onClick={handleRefresh} disabled={spinning} className="gap-1">
-            <RefreshCw className={"h-3.5 w-3.5" + (spinning ? " animate-spin" : "")} /> Refresh
+            <RefreshCw className={"h-3.5 w-3.5" + (spinning ? " animate-spin" : "")} /> {tc("refresh")}
           </Button>
         }
       />
@@ -72,26 +78,27 @@ export function PendingMessagesPage() {
         ) : groups.length === 0 ? (
           <EmptyState
             icon={Inbox}
-            title="No pending messages"
-            description="No buffered message groups found. Messages appear here when channels buffer incoming messages before agent processing."
+            title={t("emptyTitle")}
+            description={t("emptyDescription")}
           />
         ) : (
           <div className="rounded-md border">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
-                  <th className="px-4 py-3 text-left font-medium">Channel</th>
-                  <th className="px-4 py-3 text-left font-medium">Group</th>
-                  <th className="px-4 py-3 text-left font-medium">Messages</th>
-                  <th className="px-4 py-3 text-left font-medium">Status</th>
-                  <th className="px-4 py-3 text-left font-medium">Last Activity</th>
-                  <th className="px-4 py-3 text-left font-medium">Actions</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.channel")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.group")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.messages")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.status")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.lastActivity")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.actions")}</th>
                 </tr>
               </thead>
               <tbody>
                 {groups.map((g) => {
                   const rowKey = `${g.channel_name}/${g.history_key}`;
                   const busy = actionLoading === rowKey;
+                  const isCompacting = compactingKey === rowKey;
                   return (
                     <tr
                       key={rowKey}
@@ -109,9 +116,9 @@ export function PendingMessagesPage() {
                       <td className="px-4 py-3">{g.message_count}</td>
                       <td className="px-4 py-3">
                         {g.has_summary ? (
-                          <Badge variant="success" className="text-xs">Compacted</Badge>
+                          <Badge variant="success" className="text-xs">{t("status.compacted")}</Badge>
                         ) : (
-                          <Badge variant="secondary" className="text-xs">Raw</Badge>
+                          <Badge variant="secondary" className="text-xs">{t("status.raw")}</Badge>
                         )}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
@@ -126,7 +133,12 @@ export function PendingMessagesPage() {
                             disabled={busy || g.has_summary}
                             onClick={(e) => handleCompact(e, g)}
                           >
-                            <Archive className="h-3 w-3" /> Compact
+                            {isCompacting ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Archive className="h-3 w-3" />
+                            )}
+                            {isCompacting ? t("compacting") : t("compact")}
                           </Button>
                           <Button
                             variant="outline"
@@ -135,7 +147,7 @@ export function PendingMessagesPage() {
                             disabled={busy}
                             onClick={(e) => { e.stopPropagation(); setConfirmClear(g); }}
                           >
-                            <Trash2 className="h-3 w-3" /> Clear
+                            <Trash2 className="h-3 w-3" /> {t("clear")}
                           </Button>
                         </div>
                       </td>
@@ -178,18 +190,18 @@ function ConfirmClearDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation("pending-messages");
+  const { t: tc } = useTranslation("common");
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="w-full max-w-sm rounded-lg border bg-background p-6 shadow-lg">
-        <h3 className="mb-2 font-semibold">Clear messages?</h3>
+        <h3 className="mb-2 font-semibold">{t("confirmClear.title")}</h3>
         <p className="mb-4 text-sm text-muted-foreground">
-          This will permanently delete all messages in{" "}
-          <span className="font-mono text-xs">{group.channel_name} / {group.history_key}</span>.
-          This action cannot be undone.
+          {t("confirmClear.description", { channel: group.channel_name, key: group.history_key })}
         </p>
         <div className="flex justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button>
-          <Button variant="destructive" size="sm" onClick={onConfirm}>Clear</Button>
+          <Button variant="outline" size="sm" onClick={onCancel}>{tc("cancel")}</Button>
+          <Button variant="destructive" size="sm" onClick={onConfirm}>{t("confirmClear.confirm")}</Button>
         </div>
       </div>
     </div>

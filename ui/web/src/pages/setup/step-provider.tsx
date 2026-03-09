@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/select";
 import { PROVIDER_TYPES } from "@/constants/providers";
 import { useProviders } from "@/pages/providers/hooks/use-providers";
+import { CLISection } from "@/pages/providers/provider-cli-section";
 import { slugify } from "@/lib/slug";
 import type { ProviderData } from "@/types/provider";
 
@@ -22,6 +24,7 @@ interface StepProviderProps {
 }
 
 export function StepProvider({ onComplete }: StepProviderProps) {
+  const { t } = useTranslation("setup");
   const { createProvider } = useProviders();
 
   const [providerType, setProviderType] = useState("openrouter");
@@ -31,11 +34,14 @@ export function StepProvider({ onComplete }: StepProviderProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const isCLI = providerType === "claude_cli";
+
   const handleTypeChange = (value: string) => {
     setProviderType(value);
     const preset = PROVIDER_TYPES.find((t) => t.value === value);
     setName(slugify(value));
     setApiBase(preset?.apiBase || "");
+    setApiKey("");
     setError("");
   };
 
@@ -47,7 +53,7 @@ export function StepProvider({ onComplete }: StepProviderProps) {
   );
 
   const handleCreate = async () => {
-    if (!apiKey.trim()) { setError("API key is required"); return; }
+    if (!isCLI && !apiKey.trim()) { setError(t("provider.errors.apiKeyRequired")); return; }
     setLoading(true);
     setError("");
     try {
@@ -55,12 +61,12 @@ export function StepProvider({ onComplete }: StepProviderProps) {
         name: name.trim(),
         provider_type: providerType,
         api_base: apiBase.trim() || undefined,
-        api_key: apiKey.trim(),
+        api_key: isCLI ? undefined : apiKey.trim(),
         enabled: true,
       }) as ProviderData;
       onComplete(provider);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create provider");
+      setError(err instanceof Error ? err.message : t("provider.errors.failedCreate"));
     } finally {
       setLoading(false);
     }
@@ -71,17 +77,19 @@ export function StepProvider({ onComplete }: StepProviderProps) {
       <CardContent className="space-y-4 pt-6">
         <TooltipProvider>
           <div className="space-y-1">
-            <h2 className="text-lg font-semibold">Configure LLM Provider</h2>
+            <h2 className="text-lg font-semibold">{t("provider.title")}</h2>
             <p className="text-sm text-muted-foreground">
-              Connect to an AI provider to power your agents. You'll need an API key.
+              {isCLI
+                ? t("provider.descriptionCli")
+                : t("provider.description")}
             </p>
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label className="inline-flex items-center gap-1.5">
-                Provider Type
-                <InfoTip text="The LLM service you want to connect. OpenRouter is recommended for access to multiple models." />
+                {t("provider.providerType")}
+                <InfoTip text={t("provider.providerTypeHint")} />
               </Label>
               <Select value={providerType} onValueChange={handleTypeChange}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -94,43 +102,49 @@ export function StepProvider({ onComplete }: StepProviderProps) {
             </div>
             <div className="space-y-2">
               <Label className="inline-flex items-center gap-1.5">
-                Name
-                <InfoTip text="Internal identifier for this provider. Auto-generated from provider type." />
+                {t("provider.name")}
+                <InfoTip text={t("provider.nameHint")} />
               </Label>
               <Input value={name} onChange={(e) => setName(slugify(e.target.value))} />
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label className="inline-flex items-center gap-1.5">
-              API Key *
-              <InfoTip text="Your provider's secret key. Encrypted server-side and never exposed in API responses." />
-            </Label>
-            <Input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="sk-..."
-            />
-          </div>
+          {isCLI ? (
+            <CLISection open={true} />
+          ) : (
+            <>
+              <div className="space-y-2">
+                <Label className="inline-flex items-center gap-1.5">
+                  {t("provider.apiKey")}
+                  <InfoTip text={t("provider.apiKeyHint")} />
+                </Label>
+                <Input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="sk-..."
+                />
+              </div>
 
-          <div className="space-y-2">
-            <Label className="inline-flex items-center gap-1.5">
-              API Base URL
-              <InfoTip text="The endpoint URL for API requests. Auto-filled based on provider type. Override only if using a custom proxy." />
-            </Label>
-            <Input
-              value={apiBase}
-              onChange={(e) => setApiBase(e.target.value)}
-              placeholder={apiBasePlaceholder}
-            />
-          </div>
+              <div className="space-y-2">
+                <Label className="inline-flex items-center gap-1.5">
+                  {t("provider.apiBase")}
+                  <InfoTip text={t("provider.apiBaseHint")} />
+                </Label>
+                <Input
+                  value={apiBase}
+                  onChange={(e) => setApiBase(e.target.value)}
+                  placeholder={apiBasePlaceholder}
+                />
+              </div>
+            </>
+          )}
 
           {error && <p className="text-sm text-destructive">{error}</p>}
 
           <div className="flex justify-end">
-            <Button onClick={handleCreate} disabled={loading || !apiKey.trim()}>
-              {loading ? "Creating..." : "Create Provider"}
+            <Button onClick={handleCreate} disabled={loading || (!isCLI && !apiKey.trim())}>
+              {loading ? t("provider.creating") : t("provider.create")}
             </Button>
           </div>
         </TooltipProvider>
