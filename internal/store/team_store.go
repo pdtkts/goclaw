@@ -65,8 +65,12 @@ type TeamData struct {
 	CreatedBy   string          `json:"created_by"`
 
 	// Joined fields (populated by queries that JOIN agents table)
-	LeadAgentKey     string `json:"lead_agent_key,omitempty"`
-	LeadDisplayName  string `json:"lead_display_name,omitempty"`
+	LeadAgentKey    string `json:"lead_agent_key,omitempty"`
+	LeadDisplayName string `json:"lead_display_name,omitempty"`
+
+	// Enriched fields (populated by ListTeams)
+	MemberCount int              `json:"member_count"`
+	Members     []TeamMemberData `json:"members,omitempty"`
 }
 
 // TeamMemberData represents a team member.
@@ -80,6 +84,7 @@ type TeamMemberData struct {
 	AgentKey    string `json:"agent_key,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
 	Frontmatter string `json:"frontmatter,omitempty"`
+	Emoji       string `json:"emoji,omitempty"`
 }
 
 // TeamTaskData represents a task in the team's shared task list.
@@ -318,9 +323,14 @@ type TeamStore interface {
 	ListTasks(ctx context.Context, teamID uuid.UUID, orderBy string, statusFilter string, userID string, channel string, chatID string) ([]TeamTaskData, error)
 	// GetTask returns a single task by ID with joined agent info.
 	GetTask(ctx context.Context, taskID uuid.UUID) (*TeamTaskData, error)
+	// GetTasksByIDs returns multiple tasks by IDs in a single query.
+	GetTasksByIDs(ctx context.Context, ids []uuid.UUID) ([]TeamTaskData, error)
 	// SearchTasks performs FTS search over task subject+description.
 	// userID: if non-empty, filter to tasks created by this user.
 	SearchTasks(ctx context.Context, teamID uuid.UUID, query string, limit int, userID string) ([]TeamTaskData, error)
+	// DeleteTask permanently removes a terminal-status task (completed/failed/cancelled).
+	// Returns ErrTaskNotFound if the task does not exist or is not in a terminal status.
+	DeleteTask(ctx context.Context, taskID, teamID uuid.UUID) error
 
 	// ClaimTask atomically transitions a task from pending to in_progress.
 	// Only one agent can claim a given task (row-level lock, race-safe).
