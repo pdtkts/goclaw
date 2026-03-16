@@ -22,6 +22,11 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		return ErrorResult(err.Error())
 	}
 
+	// Gate: must list tasks before creating to prevent duplicates in concurrent group chat.
+	if ptd := PendingTeamDispatchFromCtx(ctx); ptd != nil && !ptd.HasListed() {
+		return ErrorResult("You must check existing tasks first. Call team_tasks(action=\"list\") to review the current task board before creating new tasks — this prevents duplicates in concurrent sessions.")
+	}
+
 	subject, _ := args["subject"].(string)
 	if subject == "" {
 		return ErrorResult("subject is required for create action")
@@ -65,29 +70,29 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		}
 	}
 
-	// Resolve optional assignee (agent key → UUID). Must be a team member.
-	var assigneeID uuid.UUID
-	if assigneeKey, _ := args["assignee"].(string); assigneeKey != "" {
-		aid, err := t.manager.resolveAgentByKey(assigneeKey)
-		if err != nil {
-			return ErrorResult(fmt.Sprintf("assignee %q not found: %v", assigneeKey, err))
+	// Resolve assignee (agent key → UUID). Required — every task must be assigned.
+	assigneeKey, _ := args["assignee"].(string)
+	if assigneeKey == "" {
+		return ErrorResult("assignee is required — specify which team member should handle this task")
+	}
+	assigneeID, err := t.manager.resolveAgentByKey(assigneeKey)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("assignee %q not found: %v", assigneeKey, err))
+	}
+	// Verify assignee is a member of this team.
+	members, err := t.manager.cachedListMembers(ctx, team.ID, agentID)
+	if err != nil {
+		return ErrorResult("failed to verify team membership: " + err.Error())
+	}
+	isMember := false
+	for _, m := range members {
+		if m.AgentID == assigneeID {
+			isMember = true
+			break
 		}
-		// Verify assignee is a member of this team.
-		members, err := t.manager.cachedListMembers(ctx, team.ID, agentID)
-		if err != nil {
-			return ErrorResult("failed to verify team membership: " + err.Error())
-		}
-		isMember := false
-		for _, m := range members {
-			if m.AgentID == aid {
-				isMember = true
-				break
-			}
-		}
-		if !isMember {
-			return ErrorResult(fmt.Sprintf("agent %q is not a member of this team", assigneeKey))
-		}
-		assigneeID = aid
+	}
+	if !isMember {
+		return ErrorResult(fmt.Sprintf("agent %q is not a member of this team", assigneeKey))
 	}
 
 	requireApproval, _ := args["require_approval"].(bool)
@@ -117,6 +122,14 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		}
 		taskMeta["original_blocked_by"] = ids
 	}
+	// Store peer kind so dispatches preserve the correct session scope (group vs direct).
+	if pk := ToolPeerKindFromCtx(ctx); pk != "" {
+		taskMeta["peer_kind"] = pk
+	}
+	// Store local key so forum-topic routing works on deferred/unblocked dispatches.
+	if lk := ToolLocalKeyFromCtx(ctx); lk != "" {
+		taskMeta["local_key"] = lk
+	}
 	// Store leader's trace context so unblocked dispatch links back to the leader's trace.
 	if traceID := tracing.TraceIDFromContext(ctx); traceID != uuid.Nil {
 		taskMeta["origin_trace_id"] = traceID.String()
@@ -139,9 +152,7 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		ChatID:           chatID,
 		Metadata:         taskMeta,
 	}
-	if assigneeID != uuid.Nil {
-		task.OwnerAgentID = &assigneeID
-	}
+	task.OwnerAgentID = &assigneeID
 
 	if err := t.manager.teamStore.CreateTask(ctx, task); err != nil {
 		return ErrorResult("failed to create task: " + err.Error())
@@ -160,23 +171,21 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		ActorType: "agent",
 		ActorID:   agentKey,
 	})
-	if assigneeID != uuid.Nil {
-		t.manager.broadcastTeamEvent(protocol.EventTeamTaskAssigned, protocol.TeamTaskEventPayload{
-			TeamID:        team.ID.String(),
-			TaskID:        task.ID.String(),
-			Status:        status,
-			OwnerAgentKey: t.manager.agentKeyFromID(ctx, assigneeID),
-			UserID:        store.UserIDFromContext(ctx),
-			Channel:       ToolChannelFromCtx(ctx),
-			ChatID:        chatID,
-			Timestamp:     task.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-			ActorType:     "agent",
-			ActorID:       agentKey,
-		})
-	}
+	t.manager.broadcastTeamEvent(protocol.EventTeamTaskAssigned, protocol.TeamTaskEventPayload{
+		TeamID:        team.ID.String(),
+		TaskID:        task.ID.String(),
+		Status:        status,
+		OwnerAgentKey: t.manager.agentKeyFromID(ctx, assigneeID),
+		UserID:        store.UserIDFromContext(ctx),
+		Channel:       ToolChannelFromCtx(ctx),
+		ChatID:        chatID,
+		Timestamp:     task.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		ActorType:     "agent",
+		ActorID:       agentKey,
+	})
 
 	// Track for post-turn dispatch. If no post-turn hook (e.g. HTTP API), dispatch immediately.
-	if assigneeID != uuid.Nil && status == store.TeamTaskStatusPending {
+	if status == store.TeamTaskStatusPending {
 		if ptd := PendingTeamDispatchFromCtx(ctx); ptd != nil {
 			ptd.Add(team.ID, task.ID)
 		} else {
@@ -278,7 +287,7 @@ func (t *TeamTasksTool) executeProgress(ctx context.Context, args map[string]any
 		return ErrorResult("task does not belong to your team")
 	}
 	if task.OwnerAgentID == nil || *task.OwnerAgentID != agentID {
-		return ErrorResult("only the task owner can update progress")
+		return ErrorResult("only the assigned task owner can update progress. As team lead, task results arrive automatically when members complete their work.")
 	}
 
 	if err := t.manager.teamStore.UpdateTaskProgress(ctx, taskID, team.ID, percent, step); err != nil {
