@@ -185,7 +185,7 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 			if err := t.manager.teamStore.AssignTask(ctx, task.ID, assigneeID, team.ID); err != nil {
 				slog.Warn("executeCreate: fallback assign failed", "task_id", task.ID, "error", err)
 			} else {
-				t.manager.broadcastTeamEvent(protocol.EventTeamTaskAssigned, protocol.TeamTaskEventPayload{
+				t.manager.broadcastTeamEvent(protocol.EventTeamTaskDispatched, protocol.TeamTaskEventPayload{
 					TeamID:        team.ID.String(),
 					TaskID:        task.ID.String(),
 					TaskNumber:    task.TaskNumber,
@@ -203,7 +203,11 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 		}
 	}
 
-	return NewResult(fmt.Sprintf("Task created: %s (id=%s, identifier=%s, status=%s)", subject, task.ID, task.Identifier, status))
+	assigneeName := t.manager.agentDisplayName(ctx, t.manager.agentKeyFromID(ctx, assigneeID))
+	if assigneeName == "" {
+		assigneeName = t.manager.agentKeyFromID(ctx, assigneeID)
+	}
+	return NewResult(fmt.Sprintf("Task created: %s (id=%s, task_number=%d, status=%s, assignee=%s)", subject, task.ID, task.TaskNumber, status, assigneeName))
 }
 
 func (t *TeamTasksTool) executeComment(ctx context.Context, args map[string]any) *Result {
