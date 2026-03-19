@@ -83,6 +83,18 @@ const (
 	MethodSend = "send"
 )
 
+// Agent heartbeat
+const (
+	MethodHeartbeatGet          = "heartbeat.get"
+	MethodHeartbeatSet          = "heartbeat.set"
+	MethodHeartbeatToggle       = "heartbeat.toggle"
+	MethodHeartbeatTest         = "heartbeat.test"
+	MethodHeartbeatLogs         = "heartbeat.logs"
+	MethodHeartbeatChecklistGet = "heartbeat.checklist.get"
+	MethodHeartbeatChecklistSet = "heartbeat.checklist.set"
+	MethodHeartbeatTargets      = "heartbeat.targets"
+)
+
 // Channel instances management
 const (
 	MethodChannelInstancesList   = "channels.instances.list"
