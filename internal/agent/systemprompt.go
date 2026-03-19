@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
+	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
@@ -35,6 +36,7 @@ type SystemPromptConfig struct {
 	HasSpawn      bool                   // spawn tool available?
 	HasTeam        bool                   // agent belongs to a team? (skips generic spawn section)
 	TeamWorkspace  string                 // absolute path to team shared workspace (empty if not in team)
+	TeamMembers    []store.TeamMemberData // team member roster for task assignment
 	ContextFiles  []bootstrap.ContextFile // bootstrap files for # Project Context
 	ExtraPrompt   string                 // extra system prompt (subagent context, etc.)
 	AgentType     string                 // "open" or "predefined" — affects context file framing
@@ -79,7 +81,8 @@ var coreToolSummaries = map[string]string{
 	"web_search":    "Search the web",
 	"web_fetch":     "Fetch and extract content from a URL",
 	"datetime":      "Get current date/time with timezone support — use before creating cron jobs or time-sensitive operations",
-	"cron":          "Manage scheduled jobs and reminders",
+	"cron":          "Manage scheduled jobs and reminders — use for user-requested tasks at specific times or intervals (e.g. 'remind me at 9am', 'check weather every morning')",
+	"heartbeat":     "Manage agent heartbeat — periodic background monitoring with HEARTBEAT.md checklist. Use for autonomous proactive check-ins (e.g. 'monitor server status every 30 min'). Unlike cron, heartbeat auto-suppresses 'all OK' responses via HEARTBEAT_OK",
 	"skill_search":     "Search available skills by keyword (weather, translate, github, etc.)",
 	"skill_manage":     "Create, patch, or delete skills from conversation experience",
 	"publish_skill":    "Register a skill directory in the system database, making it discoverable",
@@ -222,6 +225,11 @@ func BuildSystemPrompt(cfg SystemPromptConfig) string {
 	// 6.3. ## Team Workspace (when agent belongs to a team) — skip during bootstrap
 	if !cfg.IsBootstrap && hasTeamWorkspace(cfg.ToolNames) {
 		lines = append(lines, buildTeamWorkspaceSection(cfg.TeamWorkspace)...)
+	}
+
+	// 6.4. ## Team Members — inject roster so agent knows who to assign tasks to
+	if !cfg.IsBootstrap && len(cfg.TeamMembers) > 0 {
+		lines = append(lines, buildTeamMembersSection(cfg.TeamMembers)...)
 	}
 
 	// 6.5 ## Sandbox (matching TS sandboxInfo section) — skip during bootstrap

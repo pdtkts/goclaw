@@ -73,15 +73,21 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	if l.subagentsCfg != nil {
 		ctx = tools.WithSubagentConfig(ctx, l.subagentsCfg)
 	}
-	// Pass the agent's model so subagents inherit it instead of the system default.
+	// Pass the agent's model and provider so subagents inherit the correct combo.
 	if l.model != "" {
 		ctx = tools.WithParentModel(ctx, l.model)
+	}
+	if l.provider != nil {
+		ctx = tools.WithParentProvider(ctx, l.provider.Name())
 	}
 	if l.memoryCfg != nil {
 		ctx = tools.WithMemoryConfig(ctx, l.memoryCfg)
 	}
 	if l.sandboxCfg != nil {
 		ctx = tools.WithSandboxConfig(ctx, l.sandboxCfg)
+	}
+	if l.shellDenyGroups != nil {
+		ctx = store.WithShellDenyGroups(ctx, l.shellDenyGroups)
 	}
 
 	// Workspace scope propagation (delegation origin → workspace tools).
@@ -243,7 +249,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 	// buildMessages resolves context files once and also detects BOOTSTRAP.md presence
 	// (hadBootstrap) — no extra DB roundtrip needed for bootstrap detection.
-	messages, hadBootstrap := l.buildMessages(ctx, history, summary, req.Message, req.ExtraSystemPrompt, req.SessionKey, req.Channel, req.ChannelType, req.PeerKind, req.UserID, req.HistoryLimit, req.SkillFilter)
+	messages, hadBootstrap := l.buildMessages(ctx, history, summary, req.Message, req.ExtraSystemPrompt, req.SessionKey, req.Channel, req.ChannelType, req.PeerKind, req.UserID, req.HistoryLimit, req.SkillFilter, req.LightContext)
 
 	// 1b. Determine image routing strategy.
 	// If read_image tool has a dedicated vision provider, images are NOT attached inline
@@ -355,7 +361,29 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	// knows images were received and stored (consistent with audio/video enrichment).
 	l.enrichImageIDs(messages, mediaRefs)
 
-	// 2f. Cross-session task reminder: notify team leads about pending and in-progress tasks.
+	// 2f. Collect all media file paths for team workspace auto-collect.
+	// When the leader calls team_tasks(create), these paths are copied to the
+	// team workspace so members can access attached files.
+	if len(mediaRefs) > 0 && l.mediaStore != nil {
+		var mediaPaths []string
+		for _, ref := range mediaRefs {
+			if p, err := l.mediaStore.LoadPath(ref.ID); err == nil {
+				mediaPaths = append(mediaPaths, p)
+			}
+		}
+		if len(mediaPaths) > 0 {
+			ctx = tools.WithRunMediaPaths(ctx, mediaPaths)
+			// Extract original filenames from <media:document name="X" path="Y"> tags
+			// in the last user message (enriched in step 2b above).
+			if lastMsg := messages[len(messages)-1]; lastMsg.Role == "user" {
+				if nameMap := tools.ExtractMediaNameMap(lastMsg.Content); len(nameMap) > 0 {
+					ctx = tools.WithRunMediaNames(ctx, nameMap)
+				}
+			}
+		}
+	}
+
+	// 2g. Cross-session task reminder: notify team leads about pending and in-progress tasks.
 	// Stale recovery (expired lock → pending) is handled by the background TaskTicker.
 	if l.teamStore != nil && l.agentUUID != uuid.Nil {
 		if team, _ := l.teamStore.GetTeamForAgent(ctx, l.agentUUID); team != nil && team.LeadAgentID == l.agentUUID {
@@ -590,10 +618,16 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			toolDefs = filtered
 		}
 
+		// Use per-request model override if set (e.g. heartbeat uses cheaper model).
+		model := l.model
+		if req.ModelOverride != "" {
+			model = req.ModelOverride
+		}
+
 		chatReq := providers.ChatRequest{
 			Messages: messages,
 			Tools:    toolDefs,
-			Model:    l.model,
+			Model:    model,
 			Options: map[string]any{
 				providers.OptMaxTokens:   l.effectiveMaxTokens(),
 				providers.OptTemperature: 0.7,
