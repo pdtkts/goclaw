@@ -79,7 +79,7 @@ func runGateway() {
 	// Detect server IPs for output scrubbing (prevents IP leaks via web_fetch, exec, etc.)
 	tools.DetectServerIPs(context.Background())
 
-	toolsReg, execApprovalMgr, mcpMgr, sandboxMgr, browserMgr, webFetchTool, permPE, toolPE, dataDir, agentCfg := setupToolRegistry(cfg, workspace, providerRegistry)
+	toolsReg, execApprovalMgr, mcpMgr, sandboxMgr, browserMgr, webFetchTool, ttsTool, permPE, toolPE, dataDir, agentCfg := setupToolRegistry(cfg, workspace, providerRegistry)
 	if browserMgr != nil {
 		defer browserMgr.Close()
 	}
@@ -408,7 +408,7 @@ func runGateway() {
 
 	// Register all RPC methods
 	server.SetLogTee(logTee)
-	pairingMethods, heartbeatMethods := registerAllMethods(server, agentRouter, pgStores.Sessions, pgStores.Cron, pgStores.Pairing, cfg, cfgPath, workspace, dataDir, msgBus, execApprovalMgr, pgStores.Agents, pgStores.Skills, pgStores.ConfigSecrets, pgStores.Teams, contextFileInterceptor, logTee, pgStores.Heartbeats)
+	pairingMethods, heartbeatMethods := registerAllMethods(server, agentRouter, pgStores.Sessions, pgStores.Cron, pgStores.Pairing, cfg, cfgPath, workspace, dataDir, msgBus, execApprovalMgr, pgStores.Agents, pgStores.Skills, pgStores.ConfigSecrets, pgStores.Teams, contextFileInterceptor, logTee, pgStores.Heartbeats, pgStores.ConfigPermissions)
 
 	// Wire pairing event broadcasts to all WS clients.
 	pairingMethods.SetBroadcaster(server.BroadcastEvent)
@@ -436,7 +436,7 @@ func runGateway() {
 		instanceLoader = channels.NewInstanceLoader(pgStores.ChannelInstances, pgStores.Agents, channelMgr, msgBus, pgStores.Pairing)
 		instanceLoader.SetProviderRegistry(providerRegistry)
 		instanceLoader.SetPendingCompactionConfig(cfg.Channels.PendingCompaction)
-		instanceLoader.RegisterFactory(channels.TypeTelegram, telegram.FactoryWithStores(pgStores.Agents, pgStores.Teams, pgStores.PendingMessages))
+		instanceLoader.RegisterFactory(channels.TypeTelegram, telegram.FactoryWithStores(pgStores.Agents, pgStores.ConfigPermissions, pgStores.Teams, pgStores.PendingMessages))
 		instanceLoader.RegisterFactory(channels.TypeDiscord, discord.FactoryWithPendingStore(pgStores.PendingMessages))
 		instanceLoader.RegisterFactory(channels.TypeFeishu, feishu.FactoryWithPendingStore(pgStores.PendingMessages))
 		instanceLoader.RegisterFactory(channels.TypeZaloOA, zalo.Factory)
@@ -745,7 +745,7 @@ func runGateway() {
 		tokens := agent.EstimateTokensWithCalibration(history, lastPT, lastMC)
 		cw := pgStores.Sessions.GetContextWindow(sessionKey)
 		if cw <= 0 {
-			cw = 200000 // fallback for sessions not yet processed
+			cw = config.DefaultContextWindow
 		}
 		return tokens, cw
 	})
@@ -787,6 +787,9 @@ func runGateway() {
 			}
 		}
 	})
+
+	// Slow tool notification subscriber — direct outbound when tool exceeds adaptive threshold.
+	wireSlowToolNotifySubscriber(msgBus)
 
 	// Start inbound message consumer (channel → scheduler → agent → channel)
 	consumerTeamStore := pgStores.Teams
@@ -852,6 +855,23 @@ func runGateway() {
 			return
 		}
 		webFetchTool.UpdatePolicy(updatedCfg.Tools.WebFetch.Policy, updatedCfg.Tools.WebFetch.AllowedDomains, updatedCfg.Tools.WebFetch.BlockedDomains)
+	})
+
+	// Reload TTS providers on config changes via pub/sub.
+	msgBus.Subscribe("tts-config-reload", func(evt bus.Event) {
+		if evt.Name != bus.TopicConfigChanged {
+			return
+		}
+		updatedCfg, ok := evt.Payload.(*config.Config)
+		if !ok {
+			return
+		}
+		newMgr := setupTTS(updatedCfg)
+		if newMgr == nil {
+			return
+		}
+		ttsTool.UpdateManager(newMgr)
+		slog.Info("tts config reloaded", "provider", newMgr.PrimaryProvider(), "auto", string(newMgr.AutoMode()))
 	})
 
 	// Contact collector: auto-collect user info from channels with in-memory dedup cache.
