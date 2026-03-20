@@ -319,7 +319,9 @@
       "alsoAllow": "Also Allow",
       "selectToolsAllow": "Select tools to allow...",
       "selectToolsDeny": "Select tools to deny...",
-      "selectToolsAlsoAllow": "Select additional tools..."
+      "selectToolsAlsoAllow": "Select additional tools...",
+      "toolCallPrefix": "Tool Call Prefix",
+      "toolCallPrefixHint": "Strips this prefix from model's tool call names before registry lookup."
     },
     "workspaceSharing": {
       "title": "Workspace Sharing",
@@ -504,6 +506,10 @@
     "updateFailed": "Failed to update agent",
     "deleted": "Agent deleted",
     "deleteFailed": "Failed to delete agent",
-    "unknownError": "Unknown error"
+    "unknownError": "Unknown error",
+    "skillGranted": "Skill granted",
+    "skillGrantFailed": "Failed to grant skill",
+    "skillRevoked": "Skill revoked",
+    "skillRevokeFailed": "Failed to revoke skill"
   }
 }
