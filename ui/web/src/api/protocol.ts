@@ -196,6 +196,7 @@ export const Events = {
   TEAM_TASK_CLAIMED: "team.task.claimed",
   TEAM_TASK_COMPLETED: "team.task.completed",
   TEAM_TASK_CANCELLED: "team.task.cancelled",
+  TEAM_TASK_FAILED: "team.task.failed",
   TEAM_TASK_REVIEWED: "team.task.reviewed",
   TEAM_TASK_APPROVED: "team.task.approved",
   TEAM_TASK_REJECTED: "team.task.rejected",
@@ -222,6 +223,9 @@ export const Events = {
   AGENT_LINK_CREATED: "agent_link.created",
   AGENT_LINK_UPDATED: "agent_link.updated",
   AGENT_LINK_DELETED: "agent_link.deleted",
+
+  // Session lifecycle
+  SESSION_UPDATED: "session.updated",
 
   // Trace lifecycle
   TRACE_UPDATED: "trace.updated",

@@ -117,8 +117,8 @@ func runGateway() {
 		// Wire announce queue for batched subagent result delivery (matching TS debounce pattern)
 		announceQueue := tools.NewAnnounceQueue(1000, 20,
 			func(sessionKey string, items []tools.AnnounceQueueItem, meta tools.AnnounceMetadata) {
-				remainingActive := subagentMgr.CountRunningForParent(meta.ParentAgent)
-				content := tools.FormatBatchedAnnounce(items, remainingActive)
+				roster := subagentMgr.RosterForParent(meta.ParentAgent)
+				content := tools.FormatBatchedAnnounce(items, roster)
 				senderID := fmt.Sprintf("subagent:batch-%d", len(items))
 				label := items[0].Label
 				if len(items) > 1 {
@@ -153,9 +153,6 @@ func runGateway() {
 					Media:    batchMedia,
 				})
 			},
-			func(parentID string) int {
-				return subagentMgr.CountRunningForParent(parentID)
-			},
 		)
 		subagentMgr.SetAnnounceQueue(announceQueue)
 
@@ -187,6 +184,8 @@ func runGateway() {
 
 	// Message tool (send to channels)
 	toolsReg.Register(tools.NewMessageTool(workspace, agentCfg.RestrictToWorkspace))
+	// Group members tool (list members in group chats)
+	toolsReg.Register(tools.NewListGroupMembersTool())
 	slog.Info("session + message tools registered")
 
 	// Register legacy tool aliases (backward-compat names from policy.go).
@@ -427,6 +426,12 @@ func runGateway() {
 	if t, ok := toolsReg.Get("message"); ok {
 		if cs, ok := t.(tools.ChannelSenderAware); ok {
 			cs.SetChannelSender(channelMgr.SendToChannel)
+		}
+	}
+	// Wire group member lister on list_group_members tool
+	if t, ok := toolsReg.Get("list_group_members"); ok {
+		if gl, ok := t.(tools.GroupMemberListerAware); ok {
+			gl.SetGroupMemberLister(channelMgr.ListGroupMembers)
 		}
 	}
 
