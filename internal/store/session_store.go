@@ -53,6 +53,8 @@ type SessionInfo struct {
 // SessionListOpts holds pagination options for ListPaged.
 type SessionListOpts struct {
 	AgentID string
+	Channel string // optional: filter by channel prefix ("ws", "telegram", etc.)
+	UserID  string // optional: filter by user_id
 	Limit   int
 	Offset  int
 }
@@ -89,6 +91,7 @@ type SessionStore interface {
 	GetHistory(key string) []providers.Message
 	GetSummary(key string) string
 	SetSummary(key, summary string)
+	GetLabel(key string) string
 	SetLabel(key, label string)
 	SetAgentInfo(key string, agentUUID uuid.UUID, userID string)
 	UpdateMetadata(key, model, provider, channel string)
