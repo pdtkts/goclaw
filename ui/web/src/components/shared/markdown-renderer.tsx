@@ -4,6 +4,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import { useClipboard } from "@/hooks/use-clipboard";
+import { useAuthStore } from "@/stores/use-auth-store";
+import { toFileUrl } from "@/lib/file-helpers";
 import { Check, Copy, Download, FileText } from "lucide-react";
 import { ImageLightbox } from "./image-lightbox";
 import {
@@ -62,16 +64,6 @@ function isFileLink(href: string | undefined): boolean {
   return false;
 }
 
-/** Convert a local file path to a /v1/files/ URL for serving */
-function toFileUrl(href: string): string {
-  if (href.startsWith("/v1/files/")) return href;
-  if (href.includes("/v1/files/")) return href;
-  // For relative paths, try resolving via /v1/files/ with the path
-  // Strip leading ./ or ../
-  const cleaned = href.replace(/^\.\.?\//, "");
-  return `/v1/files/${cleaned}`;
-}
-
 /** File type detection from name */
 function isMarkdownExt(name: string): boolean {
   return /\.(md|mdx|markdown)$/i.test(name);
@@ -91,6 +83,7 @@ function fileNameFromHref(href: string): string {
 }
 
 export function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
+  const token = useAuthStore((s) => s.token);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
   const openLightbox = useCallback((src: string, alt: string) => setLightbox({ src, alt }), []);
   const [filePreview, setFilePreview] = useState<{ name: string; href: string; content: string; mediaType?: "image" | "audio" | "video" } | null>(null);
@@ -103,12 +96,15 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
       setFilePreview({ name, href, content: "", mediaType: media });
       return;
     }
-    // Text/code files: fetch content
+    // Text/code files: fetch content (href already includes ?token= from toFileUrl)
     setFileLoading(true);
     fetch(href)
-      .then((res) => res.text())
+      .then((res) => {
+        if (!res.ok) throw new Error(res.statusText);
+        return res.text();
+      })
       .then((text) => setFilePreview({ name, href, content: text }))
-      .catch(() => window.open(href, "_blank"))
+      .catch(() => { /* fetch failed — file may not exist, ignore */ })
       .finally(() => setFileLoading(false));
   }, []);
 
@@ -139,8 +135,8 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
           },
           a({ href, children }) {
             if (isFileLink(href)) {
-              const resolvedHref = toFileUrl(href!);
-              const name = typeof children === "string" ? children : fileNameFromHref(resolvedHref);
+              const resolvedHref = toFileUrl(href!, token);
+              const name = typeof children === "string" ? children : fileNameFromHref(href!);
               return (
                 <span className="inline-flex items-center gap-0.5 rounded border bg-muted/50 text-[0.85em] font-medium">
                   <button
@@ -169,15 +165,16 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
             );
           },
           img({ src, alt, ...props }) {
+            const resolvedSrc = isFileLink(src) ? toFileUrl(src!, token) : src;
             return (
               <img
-                src={src}
+                src={resolvedSrc}
                 alt={alt ?? "image"}
                 className="max-w-sm rounded-lg border shadow-sm cursor-pointer hover:opacity-90 transition-opacity"
                 loading="lazy"
                 onClick={(e) => {
                   e.preventDefault();
-                  if (src) openLightbox(src, alt ?? "image");
+                  if (resolvedSrc) openLightbox(resolvedSrc, alt ?? "image");
                 }}
                 {...props}
               />
@@ -231,13 +228,13 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
 
       <Dialog open={!!filePreview} onOpenChange={(open) => { if (!open) setFilePreview(null); }}>
         {filePreview && (
-          <DialogContent className="sm:max-w-2xl max-h-[85vh] flex flex-col">
-            <DialogHeader className="flex-row items-center justify-between gap-2">
-              <DialogTitle className="truncate text-base">{filePreview.name}</DialogTitle>
+          <DialogContent className="sm:max-w-4xl max-h-[85vh] flex flex-col">
+            <DialogHeader className="flex-row items-center gap-2 pr-10">
+              <DialogTitle className="truncate text-base flex-1">{filePreview.name}</DialogTitle>
               <a
                 href={filePreview.href}
                 download={filePreview.name}
-                className="mr-8 flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted"
+                className="flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted"
               >
                 <Download className="h-3.5 w-3.5" />
                 Download
