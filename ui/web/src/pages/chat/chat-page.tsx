@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams, useNavigate } from "react-router";
 import { Eye, PanelLeftOpen } from "lucide-react";
@@ -29,13 +29,17 @@ export function ChatPage() {
   // sessionKey derived from URL — single source of truth, no separate state
   const sessionKey = urlSessionKey ?? "";
 
-  const [agentId, setAgentId] = useState(() => {
+  // Fallback agent ID used only when URL has no session key
+  const [agentIdFallback, setAgentIdFallback] = useState("default");
+
+  // Derive agentId from URL (source of truth), fallback to state when no session
+  const agentId = useMemo(() => {
     if (urlSessionKey) {
       const { agentId: parsed } = parseSessionKey(urlSessionKey);
       if (parsed) return parsed;
     }
-    return "default";
-  });
+    return agentIdFallback;
+  }, [urlSessionKey, agentIdFallback]);
 
   const {
     sessions,
@@ -91,12 +95,10 @@ export function ChatPage() {
   const handleSessionSelect = useCallback(
     (key: string) => {
       const { agentId: parsed } = parseSessionKey(key);
-      if (parsed && parsed !== agentId) {
-        setAgentId(parsed);
-      }
+      if (parsed) setAgentIdFallback(parsed);
       navigate(`/chat/${encodeURIComponent(key)}`);
     },
-    [navigate, agentId],
+    [navigate],
   );
 
   const handleDeleteSession = useCallback(async (key: string) => {
@@ -113,10 +115,12 @@ export function ChatPage() {
 
   const handleAgentChange = useCallback(
     (newAgentId: string) => {
-      setAgentId(newAgentId);
-      navigate(`/chat/${encodeURIComponent(`agent:${newAgentId}:ws:direct:${crypto.randomUUID()}`)}`);
+      setAgentIdFallback(newAgentId);
+      if (sessionKey) {
+        navigate("/chat");
+      }
     },
-    [navigate],
+    [navigate, sessionKey],
   );
 
   const handleSend = useCallback(
@@ -158,7 +162,7 @@ export function ChatPage() {
   }, [handleNewChat]);
 
   return (
-    <div className="relative flex h-full">
+    <div className="relative flex h-full overflow-hidden">
       {/* Chat Sidebar */}
       {isMobile ? (
         <>
@@ -200,9 +204,9 @@ export function ChatPage() {
       )}
 
       {/* Main chat area */}
-      <div className="flex flex-1 flex-col">
+      <div className="flex flex-1 min-h-0 flex-col">
         {isMobile && (
-          <div className="flex items-center border-b px-3 py-2 landscape-compact">
+          <div className="flex shrink-0 items-center border-b px-3 py-2 landscape-compact">
             <button
               onClick={() => setChatSidebarOpen(true)}
               className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
@@ -213,10 +217,12 @@ export function ChatPage() {
           </div>
         )}
 
-        <ChatTopBar agentId={agentId} isRunning={isRunning} isBusy={isBusy} activity={activity} teamTasks={teamTasks} />
+        <div className="shrink-0">
+          <ChatTopBar agentId={agentId} isRunning={isRunning} isBusy={isBusy} activity={activity} teamTasks={teamTasks} />
+        </div>
 
         {sendError && (
-          <div className="border-b bg-destructive/10 px-4 py-2 text-sm text-destructive">
+          <div className="shrink-0 border-b bg-destructive/10 px-4 py-2 text-sm text-destructive">
             {sendError}
           </div>
         )}
