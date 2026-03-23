@@ -41,7 +41,8 @@ const (
 // AgentData represents an agent in the database.
 type AgentData struct {
 	BaseModel
-	AgentKey            string `json:"agent_key"`
+	TenantID            uuid.UUID `json:"tenant_id"`
+	AgentKey            string    `json:"agent_key"`
 	DisplayName         string `json:"display_name,omitempty"`
 	Frontmatter         string `json:"frontmatter,omitempty"` // short expertise summary (NOT other_config.description which is the summoning prompt)
 	OwnerID             string `json:"owner_id"`
@@ -241,7 +242,8 @@ type WorkspaceSharingConfig struct {
 	SharedDM    bool     `json:"shared_dm"`
 	SharedGroup bool     `json:"shared_group"`
 	SharedUsers []string `json:"shared_users,omitempty"`
-	ShareMemory bool     `json:"share_memory"`
+	ShareMemory         bool `json:"share_memory"`
+	ShareKnowledgeGraph bool `json:"share_knowledge_graph"`
 }
 
 // ParseWorkspaceSharing extracts workspace_sharing from other_config JSONB.
@@ -256,7 +258,7 @@ func (a *AgentData) ParseWorkspaceSharing() *WorkspaceSharingConfig {
 	if json.Unmarshal(a.OtherConfig, &cfg) != nil || cfg.WS == nil {
 		return nil
 	}
-	if !cfg.WS.SharedDM && !cfg.WS.SharedGroup && len(cfg.WS.SharedUsers) == 0 && !cfg.WS.ShareMemory {
+	if !cfg.WS.SharedDM && !cfg.WS.SharedGroup && len(cfg.WS.SharedUsers) == 0 && !cfg.WS.ShareMemory && !cfg.WS.ShareKnowledgeGraph {
 		return nil
 	}
 	return cfg.WS
@@ -314,6 +316,8 @@ type AgentStore interface {
 	Create(ctx context.Context, agent *AgentData) error
 	GetByKey(ctx context.Context, agentKey string) (*AgentData, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*AgentData, error)
+	GetByKeys(ctx context.Context, keys []string) ([]AgentData, error)
+	GetByIDs(ctx context.Context, ids []uuid.UUID) ([]AgentData, error)
 	Update(ctx context.Context, id uuid.UUID, updates map[string]any) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, ownerID string) ([]AgentData, error)
