@@ -410,6 +410,12 @@ func runGateway() {
 			}
 			if sysConfigs, err := pgStores.SystemConfigs.List(ctx); err == nil && len(sysConfigs) > 0 {
 				cfg.ApplySystemConfigs(sysConfigs)
+				// Update PGMemoryStore chunk config so new documents use updated settings
+				if mem := cfg.Agents.Defaults.Memory; mem != nil {
+					if pgMem, ok := pgStores.Memory.(*pg.PGMemoryStore); ok {
+						pgMem.UpdateChunkConfig(mem.MaxChunkLen, mem.ChunkOverlap)
+					}
+				}
 				slog.Debug("system_configs refreshed to in-memory config", "keys", len(sysConfigs))
 			}
 		})
@@ -497,10 +503,13 @@ func runGateway() {
 	// Channel manager
 	channelMgr := channels.NewManager(msgBus)
 
-	// Wire channel sender on message tool (now that channelMgr exists)
+	// Wire channel sender + tenant checker on message tool (now that channelMgr exists)
 	if t, ok := toolsReg.Get("message"); ok {
 		if cs, ok := t.(tools.ChannelSenderAware); ok {
 			cs.SetChannelSender(channelMgr.SendToChannel)
+		}
+		if tc, ok := t.(tools.ChannelTenantCheckerAware); ok {
+			tc.SetChannelTenantChecker(channelMgr.ChannelTenantID)
 		}
 	}
 	// Wire group member lister on list_group_members tool
