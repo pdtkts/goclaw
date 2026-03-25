@@ -20,6 +20,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
+	"github.com/nextlevelbuilder/goclaw/internal/safego"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
@@ -36,12 +37,16 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		event.UserID = req.UserID
 		event.Channel = req.Channel
 		event.ChatID = req.ChatID
+		event.TenantID = l.tenantID
 		l.emit(event)
 	}
 
-	// Inject agent UUID into context for tool routing
+	// Inject agent UUID + key into context for tool routing
 	if l.agentUUID != uuid.Nil {
 		ctx = store.WithAgentID(ctx, l.agentUUID)
+	}
+	if l.id != "" {
+		ctx = store.WithAgentKey(ctx, l.id)
 	}
 	// Inject tenant into context for tool-level tenant scoping (spawn, MCP, etc.)
 	if l.tenantID != uuid.Nil {
@@ -1140,6 +1145,14 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				wg.Add(1)
 				go func(idx int, tc providers.ToolCall) {
 					defer wg.Done()
+					defer safego.Recover(func(v any) {
+						resultCh <- indexedResult{
+							idx:          idx,
+							tc:           tc,
+							registryName: tc.Name,
+							result:       tools.ErrorResult(fmt.Sprintf("tool %q panicked: %v", tc.Name, v)),
+						}
+					}, "agent", l.id, "tool", tc.Name)
 					argsJSON, _ := json.Marshal(tc.Arguments)
 					slog.Info("tool call", "agent", l.id, "tool", tc.Name, "args_len", len(argsJSON), "parallel", true)
 					spanStart := time.Now().UTC()
@@ -1348,14 +1361,14 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 	}
 
-	// 4. Full sanitization pipeline (matching TS extractAssistantText + sanitizeUserFacingText)
+	// 5. Full sanitization pipeline (matching TS extractAssistantText + sanitizeUserFacingText)
 	finalContent = SanitizeAssistantContent(finalContent)
 
 	// 4b. Config leak detection — disabled: too many false positives
 	// (e.g. agent explaining public architecture mentioning SOUL.md etc.)
 	// finalContent = StripConfigLeak(finalContent, l.agentType)
 
-	// 5. Handle NO_REPLY: save to session for context but mark as silent.
+	// 6. Handle NO_REPLY: save to session for context but mark as silent.
 	// Matching TS: NO_REPLY is saved (via resolveSilentReplyFallbackText) but
 	// filtered at the payload level before delivery.
 	isSilent := IsSilentReply(finalContent)
@@ -1373,7 +1386,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		finalContent += "\n\n---\n_" + i18n.T(locale, i18n.MsgSkillNudgePostscript) + "_"
 	}
 
-	// 6. Fallback for empty content
+	// 7. Fallback for empty content
 	if finalContent == "" {
 		if len(asyncToolCalls) > 0 {
 			finalContent = "..."
@@ -1493,14 +1506,16 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		}
 	}
 
-	// If silent, return empty content so gateway suppresses delivery.
+	// 8. Metadata Stripping: Clean internal [[...]] tags for user-facing content
+	// (Session version is already saved in assistantMsg above)
+	finalContent = StripMessageDirectives(finalContent)
 	if isSilent {
 		slog.Info("agent loop: NO_REPLY detected, suppressing delivery",
 			"agent", l.id, "session", req.SessionKey)
 		finalContent = ""
 	}
 
-	// 5. Maybe summarize
+	// 9. Maybe summarize
 	l.maybeSummarize(ctx, req.SessionKey)
 
 	return &RunResult{
