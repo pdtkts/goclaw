@@ -89,6 +89,53 @@ func buildSandboxSection(cfg SystemPromptConfig) []string {
 	return lines
 }
 
+// buildToolCallStyleSection generates the ## Tool Call Style section.
+// Matches TS system-prompt.ts "Tool Call Style" — narration minimalism + non-disclosure.
+// Prevents the agent from exposing internal tool names to users.
+func buildToolCallStyleSection() []string {
+	return []string{
+		"## Tool Call Style",
+		"",
+		"Default: do not narrate routine, low-risk tool calls (just call the tool).",
+		"Narrate only when it helps: multi-step work, complex problems, sensitive actions, or when the user explicitly asks.",
+		"Keep narration brief and value-dense; avoid repeating obvious steps.",
+		"Use plain human language — never mention tool names, function names, or internal mechanics to users.",
+		"",
+		"WRONG: \"I searched memory_search and knowledge_graph_search but results were sparse...\"",
+		"RIGHT: \"Hmm, I remember you mentioned that before...\" or \"I don't recall that specifically.\"",
+		"",
+		"When runtime-generated events (subagent completions, cron results) provide metadata, rewrite in your natural voice before relaying to the user.",
+		"When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI commands.",
+		"",
+	}
+}
+
+// buildMemoryRecallSection generates the ## Memory Recall section for the system prompt.
+func buildMemoryRecallSection(hasMemoryGet, hasKG bool) []string {
+	lines := []string{"## Memory Recall", ""}
+
+	if hasMemoryGet {
+		lines = append(lines,
+			"Before answering questions about prior work, decisions, people, preferences, or todos: "+
+				"call memory_search with a relevant query; then use memory_get to pull only the needed lines. "+
+				"If no relevant results found, say so naturally without mentioning tool names.")
+	} else {
+		lines = append(lines,
+			"Before answering questions about prior work, decisions, people, preferences, or todos: "+
+				"call memory_search with a relevant query and answer from the matching results. "+
+				"If no relevant results found, say so naturally without mentioning tool names.")
+	}
+
+	if hasKG {
+		lines = append(lines,
+			"Also run knowledge_graph_search when the question involves people, teams, projects, or connections — "+
+				"it finds multi-hop relationship paths that memory_search misses.")
+	}
+
+	lines = append(lines, "")
+	return lines
+}
+
 func buildUserIdentitySection(ownerIDs []string) []string {
 	return []string{
 		"## User Identity",
